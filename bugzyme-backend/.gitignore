@@ -1,0 +1,57 @@
+# Environment files and credentials. Keep safe templates tracked.
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!.env.test.example
+!.env.sample
+
+# Python environments, bytecode and test caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases and dumps
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+*dump*.sql
+*backup*.sql
+
+# Private uploads and generated storage
+storage/attachments/*
+!storage/attachments/.gitkeep
+storage/private_verification/*
+!storage/private_verification/.gitkeep
+storage/exports/*
+!storage/exports/.gitkeep
+uploads/profiles/*
+!uploads/profiles/.gitkeep
+uploads/voice/*
+!uploads/voice/.gitkeep
+uploads/temp/*
+!uploads/temp/.gitkeep
+
+# Keys, logs and OS metadata
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+.DS_Store
+
+# This is an empty Node lockfile for an unused backend frontend scaffold.
+package-lock.json
+index.html
+stitch-test.html

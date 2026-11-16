@@ -1,0 +1,16 @@
+[Unit]
+Description=Raahi verification evidence retention maintenance
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=raahi
+Group=raahi
+WorkingDirectory=/opt/raahi/bugzyme-backend
+EnvironmentFile=/etc/raahi/bugzyme-backend.env
+ExecStart=/opt/raahi/bugzyme-backend/.venv/bin/python -m app.verification_retention
+TimeoutStartSec=15min
+Restart=on-failure
+RestartSec=30s

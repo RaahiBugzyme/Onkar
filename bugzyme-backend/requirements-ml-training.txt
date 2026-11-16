@@ -1,0 +1,5 @@
+# Optional supervised Dating ML training and artifact loading dependencies.
+# The production mutual-interest model remains disabled unless explicitly enabled
+# and supplied with a legitimately trained artifact.
+scikit-learn==1.9.1
+joblib==1.6.0

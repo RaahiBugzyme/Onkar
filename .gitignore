@@ -1,0 +1,123 @@
+# ==========================================
+# RAAHI ROOT GITIGNORE
+# ==========================================
+
+# 1. Environment and Secrets
+# Ignore all .env and secret files in root and subdirectories
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+# Explicitly allow safe documentation templates
+!**/.env.example
+!**/.env.test.example
+!**/.env.sample
+
+# 2. Python Virtual Environments, Bytecode and Caches
+**/.venv/
+**/venv/
+**/env/
+**/ENV/
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/.pytest_cache/
+**/.pytest-tmp/
+**/.coverage
+**/htmlcov/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# 3. Node.js & Frontend Build Artifacts
+**/node_modules/
+raahi-frontend/dist/
+raahi-frontend/.vite/
+raahi-frontend/node_modules/.tmp/
+**/.turbo/
+**/*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 4. Local Databases & Dumps
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+*.dump
+*.sql.gz
+*dump*.sql
+*backup*.sql
+**/db_dumps/
+**/database_dumps/
+bugzyme-backend/bugzyme.db
+
+# Private key and certificate bundles
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 5. Private Verification Evidence & User Uploads (PII)
+bugzyme-backend/storage/private_verification/*
+!bugzyme-backend/storage/private_verification/.gitkeep
+bugzyme-backend/storage/attachments/*
+!bugzyme-backend/storage/attachments/.gitkeep
+bugzyme-backend/uploads/profiles/*
+!bugzyme-backend/uploads/profiles/.gitkeep
+bugzyme-backend/uploads/voice/*
+!bugzyme-backend/uploads/voice/.gitkeep
+bugzyme-backend/storage/exports/*
+!bugzyme-backend/storage/exports/.gitkeep
+bugzyme-backend/uploads/temp/*
+!bugzyme-backend/uploads/temp/.gitkeep
+
+# 6. Nested Git Repositories & External Model Handoffs
+# DatingML_V3_model_handoff is an external submodule/git repo cloned with its own history.
+# The active backend utilizes the integrated app/services/dating_ml_model/ package instead.
+bugzyme-backend/app/services/DatingML_V3_model_handoff/
+
+# Colleague chat source (separate legacy Git repository)
+colleague-chat-source/
+
+# 7. Historical Project Archives & Reference Clones
+bugzyme-main/
+raahi-app/
+reference-prototypes/
+DatingML_V3_model_handoff_recovered/
+
+# 8. Temporary Diagnostics, Logs & System Files
+*.tmp
+*.log
+connectivity-diagnostic.tmp
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
+
+# 9. IDE & Editor Workspaces
+**/.vscode/*
+!**/.vscode/extensions.json
+!**/.vscode/settings.json
+**/.idea/
+**/.claude/
+*.swp
+*.swo
+
+# Internal development and audit reports
+/RAAHI_*.md
+bugzyme-backend/*AUDIT*.md
+bugzyme-backend/*REPORT*.md
+bugzyme-backend/*SUMMARY*.md
+
+# Temporary and backup frontend files
+bugzyme-backend/*.before-*
+bugzyme-backend/*.pre-audit-*
+bugzyme-backend/*.diff
+bugzyme-backend/stitch-test.html
+
+# Exclude unused backend frontend artifacts
+bugzyme-backend/package-lock.json
+bugzyme-backend/index.html

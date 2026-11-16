@@ -1,0 +1,5 @@
+# Development and regression-test dependencies; install on top of requirements.txt.
+-r requirements.txt
+-r requirements-ml-training.txt
+pytest==9.2.0
+httpx==0.28.1
