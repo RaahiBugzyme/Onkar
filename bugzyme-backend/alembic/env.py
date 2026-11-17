@@ -9,8 +9,10 @@ from app.db_safety import (
     end_phase3b_identity_transaction,
     validate_local_development_migration_url,
     validate_phase3b_database_url,
+    validate_production_database_url,
     verify_local_development_migration_identity,
     verify_phase3b_connection_identity,
+    verify_production_connection_identity,
 )
 
 # this is the Alembic Config object, which provides
@@ -30,11 +32,40 @@ if config.config_file_name is not None:
 # the disposable migration path retains its existing exact target guard.
 local_dev_migration_url = os.environ.get("RAAHI_LOCAL_DEV_MIGRATION_URL")
 disposable_migration_url = os.environ.get("RAAHI_ALEMBIC_DATABASE_URL")
-if local_dev_migration_url and disposable_migration_url:
+production_migration_url = os.environ.get("RAAHI_PRODUCTION_ALEMBIC_DATABASE_URL")
+production_opt_in = os.environ.get("RAAHI_PRODUCTION_MIGRATIONS")
+selected_targets = sum(bool(value) for value in (
+    local_dev_migration_url,
+    disposable_migration_url,
+    production_migration_url,
+))
+if selected_targets > 1:
     raise RuntimeError("Select only one explicit Alembic target; details suppressed")
+if production_opt_in not in (None, "enabled"):
+    raise RuntimeError("Production migration opt-in has an invalid value")
+if production_opt_in == "enabled" and not production_migration_url:
+    raise RuntimeError("Production migration opt-in requires its dedicated target URL")
+if production_migration_url and production_opt_in != "enabled":
+    raise RuntimeError("Production migrations require explicit opt-in")
 
 local_dev_migration = bool(local_dev_migration_url)
-if local_dev_migration:
+production_migration = bool(production_migration_url)
+production_expected_database = None
+production_expected_role = None
+if production_migration:
+    production_expected_host = os.environ.get("RAAHI_PRODUCTION_DB_HOST")
+    production_expected_database = os.environ.get("RAAHI_PRODUCTION_DB_NAME")
+    production_expected_username = os.environ.get("RAAHI_PRODUCTION_DB_USER")
+    production_expected_role = os.environ.get("RAAHI_PRODUCTION_DB_ROLE")
+    validated_migration_url = validate_production_database_url(
+        production_migration_url,
+        expected_host=production_expected_host,
+        expected_database=production_expected_database,
+        expected_username=production_expected_username,
+        expected_role=production_expected_role,
+    )
+    expected_database = production_expected_database
+elif local_dev_migration:
     validated_migration_url = validate_local_development_migration_url(
         local_dev_migration_url
     )
@@ -109,7 +140,13 @@ def run_migrations_online() -> None:
         ) from None
 
     with connection:
-        if local_dev_migration:
+        if production_migration:
+            verify_production_connection_identity(
+                connection,
+                expected_database=production_expected_database,
+                expected_role=production_expected_role,
+            )
+        elif local_dev_migration:
             verify_local_development_migration_identity(connection)
         else:
             verify_phase3b_connection_identity(
@@ -127,9 +164,9 @@ def run_migrations_online() -> None:
         )
 
         with context.begin_transaction():
-            if local_dev_migration:
-                # Serialize explicit local development upgrades without changing
-                # the disposable migration target's existing lock behavior.
+            if local_dev_migration or production_migration:
+                # Serialize local-development and explicitly approved production
+                # upgrades; disposable migration targets retain their prior behavior.
                 connection.execute(text("SELECT pg_advisory_xact_lock(7419882804270007)"))
             context.run_migrations()
 

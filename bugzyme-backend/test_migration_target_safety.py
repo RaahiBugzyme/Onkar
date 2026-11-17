@@ -8,8 +8,10 @@ from app.db_safety import (
     end_phase3b_identity_transaction,
     validate_local_development_migration_url,
     validate_phase3b_database_url,
+    validate_production_database_url,
     verify_local_development_migration_identity,
     verify_phase3b_connection_identity,
+    verify_production_connection_identity,
 )
 
 
@@ -26,6 +28,20 @@ def _url(database, **overrides):
     return URL.create(**values)
 
 
+def _production_url(**overrides):
+    values = {
+        "drivername": "postgresql+psycopg2",
+        "username": "postgres.projectref",
+        "password": "test-only-placeholder",
+        "host": "aws-1-region.pooler.supabase.com",
+        "port": 5432,
+        "database": "postgres",
+        "query": {"sslmode": "require"},
+    }
+    values.update(overrides)
+    return URL.create(**values)
+
+
 class _Result:
     def __init__(self, row):
         self.row = row
@@ -35,9 +51,12 @@ class _Result:
 
 
 class _Connection:
-    def __init__(self, row):
+    def __init__(self, row, *, ssl_in_use=False):
         self.row = row
         self._in_transaction = False
+        self.connection = self
+        self.driver_connection = self
+        self.info = type("ConnectionInfo", (), {"ssl_in_use": ssl_in_use})()
 
     def execute(self, _statement):
         self._in_transaction = True
@@ -195,6 +214,76 @@ class MigrationTargetSafetyTests(unittest.TestCase):
         ):
             with self.subTest(row=row), self.assertRaises(RuntimeError):
                 verify_local_development_migration_identity(_Connection(row))
+
+    def test_production_url_requires_exact_supabase_host_database_user_and_tls(self):
+        approved = validate_production_database_url(
+            _production_url(),
+            expected_host="aws-1-region.pooler.supabase.com",
+            expected_database="postgres",
+            expected_username="postgres.projectref",
+            expected_role="postgres",
+        )
+        self.assertEqual(approved.host, "aws-1-region.pooler.supabase.com")
+
+        invalid_cases = (
+            (_production_url(host="other.pooler.supabase.com"), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(database="other"), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(username="other_role"), "aws-1-region.pooler.supabase.com", "postgres", "other_role", "postgres"),
+            (_production_url(host="db.example.invalid"), "db.example.invalid", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(query={"sslmode": "disable"}), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(query={}), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(query={"sslmode": "require", "connect_timeout": "2"}), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(drivername="postgresql"), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "postgres"),
+            (_production_url(), "aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", "wrong_role"),
+        )
+        for candidate, host, database, username, role in invalid_cases:
+            with self.subTest(host=candidate.host, database=candidate.database), self.assertRaises(ValueError):
+                validate_production_database_url(
+                    candidate,
+                    expected_host=host,
+                    expected_database=database,
+                    expected_username=username,
+                    expected_role=role,
+                )
+
+        for expected in (
+            (None, "postgres", "postgres.projectref", "postgres"),
+            ("aws-1-region.pooler.supabase.com", None, "postgres.projectref", "postgres"),
+            ("aws-1-region.pooler.supabase.com", "postgres", None, "postgres"),
+            ("aws-1-region.pooler.supabase.com", "postgres", "postgres.projectref", None),
+        ):
+            with self.subTest(expected=expected), self.assertRaises(ValueError):
+                validate_production_database_url(
+                    _production_url(),
+                    expected_host=expected[0],
+                    expected_database=expected[1],
+                    expected_username=expected[2],
+                    expected_role=expected[3],
+                )
+
+    def test_production_live_identity_requires_expected_role_database_and_ssl(self):
+        verify_production_connection_identity(
+            _Connection(("postgres", "postgres"), ssl_in_use=True),
+            expected_database="postgres",
+            expected_role="postgres",
+        )
+        for row in (
+            ("other", "postgres"),
+            ("postgres", "other_role"),
+            ("postgres", "postgres"),
+        ):
+            with self.subTest(row=row), self.assertRaises(RuntimeError):
+                verify_production_connection_identity(
+                    _Connection(row),
+                    expected_database="postgres",
+                    expected_role="postgres",
+                )
+        with self.assertRaises(RuntimeError):
+            verify_production_connection_identity(
+                _Connection(("postgres", "postgres"), ssl_in_use=False),
+                expected_database="postgres",
+                expected_role="postgres",
+            )
 
 
 if __name__ == "__main__":

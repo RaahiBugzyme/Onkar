@@ -18,6 +18,86 @@ _MIGRATION_DATABASES = {
 }
 _LOCAL_DEV_DATABASE = "raahi"
 _LOCAL_DEV_ROLE = "postgres"
+_PRODUCTION_SSL_MODES = {"require", "verify-ca", "verify-full"}
+
+
+def validate_production_database_url(
+    url_value: str | URL | None,
+    *,
+    expected_host: str | None,
+    expected_database: str | None,
+    expected_username: str | None,
+    expected_role: str | None,
+) -> URL:
+    """Validate a narrowly allowlisted Supabase URL before opening a connection.
+
+    The expected identity is supplied independently from the URL. No wildcard
+    host matching is used, and only a TLS-enabled sslmode query parameter is
+    accepted. The URL itself must be provided through the dedicated production
+    Alembic variable, never inferred from the application .env.
+    """
+    if not all((expected_host, expected_database, expected_username, expected_role)):
+        raise ValueError("Production database identity is incomplete")
+    if not url_value:
+        raise ValueError("Production Alembic database URL is not configured")
+    try:
+        url = url_value if isinstance(url_value, URL) else make_url(url_value)
+    except Exception:
+        raise ValueError("Production database URL is invalid; details suppressed") from None
+
+    host = (url.host or "").rstrip(".").casefold()
+    expected_host_normalized = (expected_host or "").rstrip(".").casefold()
+    if not (
+        host == expected_host_normalized
+        and (host.endswith(".supabase.com") or host.endswith(".supabase.co"))
+    ):
+        raise ValueError("Production database host is not the exact approved Supabase host")
+    if url.drivername != "postgresql+psycopg2":
+        raise ValueError("Production database URL must use postgresql+psycopg2")
+    if url.database != expected_database:
+        raise ValueError("Production database URL has an unexpected database")
+    if url.username != expected_username or not url.password:
+        raise ValueError("Production database URL has an unexpected username or missing password")
+    direct_login = url.username == expected_role
+    pooler_login = (
+        host.endswith(".pooler.supabase.com")
+        and url.username.startswith(f"{expected_role}.")
+        and len(url.username) > len(expected_role) + 1
+    )
+    if not (direct_login or pooler_login):
+        raise ValueError("Production database login does not map to the expected database role")
+    if set(url.query) != {"sslmode"} or url.query.get("sslmode") not in _PRODUCTION_SSL_MODES:
+        raise ValueError("Production database URL must require PostgreSQL TLS")
+    if isinstance(url_value, str) and "#" in url_value:
+        raise ValueError("Production database URL fragments are not allowed")
+    return url
+
+
+def verify_production_connection_identity(
+    connection: Connection,
+    *,
+    expected_database: str,
+    expected_role: str,
+) -> None:
+    """Verify the effective database role and client-side TLS negotiation.
+
+    Supavisor can expose the pooler's effective database role as ``current_user``
+    rather than the project-qualified login username. Also, ``pg_stat_ssl`` can
+    describe the pooler's backend connection instead of the application's
+    client-to-pooler TLS session, so inspect psycopg2's negotiated connection.
+    """
+    row = connection.execute(text("""
+        SELECT current_database(), current_user
+    """)).one()
+    database_name, role_name = row
+    driver_connection = connection.connection.driver_connection
+    ssl_enabled = bool(driver_connection.info.ssl_in_use)
+    if (
+        database_name != expected_database
+        or role_name != expected_role
+        or not ssl_enabled
+    ):
+        raise RuntimeError("Connected PostgreSQL identity or TLS state is not approved")
 
 
 def validate_phase3b_database_url(
