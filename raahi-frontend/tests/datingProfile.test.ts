@@ -83,7 +83,7 @@ test('registration uses the existing backend account creation contract', async (
   }
 })
 
-test('authenticated users without a profile resume the first onboarding gate', () => {
+test('authenticated users without a profile resume onboarding; complete profile can enter with pending verification', () => {
   assert.equal(postAuthenticationDestination(null), '/onboarding/era')
-  assert.equal(postAuthenticationDestination(profile), '/verification')
+  assert.equal(postAuthenticationDestination(profile), '/discover')
 })

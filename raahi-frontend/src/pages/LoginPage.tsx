@@ -7,7 +7,6 @@ import { PageContainer } from '../components/PageContainer'
 import { useAuth } from '../state/AuthContext'
 import { useDatingProfile } from '../state/DatingProfileContext'
 import { postAuthenticationDestination } from '../routing/onboardingDestination'
-import { getVerificationStatus } from '../api/verification'
 import { RaahiWordmark } from '../components/RaahiWordmark'
 const googleGIcon = new URL('../assets/google-g.svg', import.meta.url).href
 
@@ -25,8 +24,7 @@ export function LoginPage() {
 
   const resolveDestination = useCallback(async () => {
     const currentProfile = await refreshProfile()
-    const verification = currentProfile ? await getVerificationStatus() : null
-    return postAuthenticationDestination(currentProfile, verification, requestedPath)
+    return postAuthenticationDestination(currentProfile, null, requestedPath)
   }, [refreshProfile, requestedPath])
 
   useEffect(() => {

@@ -2,7 +2,6 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { ApiError } from '../api/client.ts'
 import { registerAccount } from '../api/accounts'
-import { getVerificationStatus } from '../api/verification'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
@@ -26,10 +25,7 @@ export function RegisterPage() {
 
   async function resolveDestination() {
     const saved = await refreshProfile()
-    if (saved) {
-      const verification = await getVerificationStatus()
-      return postAuthenticationDestination(saved, verification)
-    }
+    if (saved) return postAuthenticationDestination(saved)
     return postAuthenticationDestination(null)
   }
 
@@ -57,7 +53,7 @@ export function RegisterPage() {
 
   if (loading || (user && profileLoading)) return <LoadingState label="Preparing your Raahi account…" />
   if (user && busy) return <LoadingState label="Setting up your Raahi account…" />
-  if (user && checkingDestination && !error) return <LoadingState label="Checking verification and profile status…" />
+  if (user && checkingDestination && !error) return <LoadingState label="Checking your profile status…" />
 
   if (user) return <PageContainer className="matches-page"><Card className="matches-empty-card matches-auth-card register-auth-card">
     <div className="register-branding"><RaahiWordmark className="register-wordmark" /><span>NO GHOSTING. JUST VIBES.</span></div>

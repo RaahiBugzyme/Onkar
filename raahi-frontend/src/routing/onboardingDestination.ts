@@ -17,11 +17,10 @@ export function isVerificationApproved(profile: DatingProfile | null, status: Ve
 
 export function postAuthenticationDestination(
   profile: DatingProfile | null,
-  verification: VerificationStatus | null = null,
+  _verification: VerificationStatus | null = null,
   requestedPath: string | null = null,
 ) {
   if (!profile) return '/onboarding/era'
-  if (!isVerificationApproved(profile, verification)) return '/verification'
   if (!requestedPath) return '/discover'
   const safePath = safeReturnPath(requestedPath)
   return ['/login', '/register', '/', '/verification', '/onboarding', '/onboarding/era', '/onboarding/situationship', '/onboarding/preferences', '/onboarding/profile'].includes(safePath)

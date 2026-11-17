@@ -6,7 +6,6 @@ import { LoadingState } from '../components/LoadingState'
 import { useAuth } from '../state/AuthContext'
 import { useDatingProfile } from '../state/DatingProfileContext'
 import { isVerificationApproved } from '../routing/onboardingDestination'
-import { shouldOfferDevelopmentVerificationContinuation } from '../routing/verificationContinuation'
 import '../styles/onboarding-flow.css'
 import '../styles/verification-v3.css'
 import '../styles/verification-dev.css'
@@ -121,7 +120,6 @@ export default function VerificationPage() {
   const faceReview = reviewLabel(faceApproved, faceRecord)
   const idReview = reviewLabel(idApproved, idRecord)
   const pendingReview = status?.current_status === 'pending' || uploadPendingReview
-  const showDevelopmentContinuation = shouldOfferDevelopmentVerificationContinuation(import.meta.env.DEV, pendingReview)
 
   return <main className="onboarding-flow verification-v3-screen">
     <div className="onboarding-flow-glow" />
@@ -168,10 +166,10 @@ export default function VerificationPage() {
         <div className="privacy-note fiu"><span className="e e-shake verification-lock">🔒</span><strong> Privacy:</strong> Evidence is encrypted before private storage and accessible only through the authorized reviewer workflow. It is not shown on public profiles.</div>
       </div>
       <div className="verification-v3-cta-wrap"><button className="btn-cta" type="button" disabled={!canUpload || busy || (!faceFile && !idFile)} onClick={() => void submitEvidence()}>{busy ? 'Submitting for review…' : "I'm real, let me in"} <span className="btn-arrow">→</span></button><button className="verification-v3-refresh" type="button" disabled={busy || statusLoading} onClick={() => void reloadStatus()}>{statusLoading ? 'Refreshing…' : 'Refresh review status'}</button></div>
-      {showDevelopmentContinuation && <div className="verification-dev-continuation">
-        <p>Development mode only. Your verification remains pending manual review; this lets you continue testing Raahi without waiting for a decision.</p>
+      <div className="verification-dev-continuation">
+        <p>Verification stays pending until an authorized reviewer approves it. You can continue exploring Raahi now; verification-required actions will remain unavailable.</p>
         <button className="verification-dev-continue" type="button" onClick={() => navigate('/discover')}>Continue to Raahi <span aria-hidden="true">→</span></button>
-      </div>}
+      </div>
     </section>
   </main>
 }

@@ -2,10 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { Outlet } from 'react-router'
 import { ApiError } from '../api/client'
 import { fetchFeed, submitSwipe, type FeedProfile, type SwipeResponse } from '../api/discover'
-import { getVerificationStatus } from '../api/verification'
 import { useDatingProfile } from './DatingProfileContext'
 import { useAuth } from './AuthContext'
-import { isVerificationApproved } from '../routing/onboardingDestination'
 
 export type DiscoverAction = SwipeResponse['action']
 interface DiscoverContextValue {
@@ -24,7 +22,7 @@ const DiscoverContext = createContext<DiscoverContextValue | null>(null)
 
 export function DiscoverProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  const { profile, loading: profileLoading } = useDatingProfile()
+  const { loading: profileLoading } = useDatingProfile()
   const [profiles, setProfiles] = useState<FeedProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -32,7 +30,6 @@ export function DiscoverProvider({ children }: { children: ReactNode }) {
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [sessionLikes, setSessionLikes] = useState(0)
-  const [eligible, setEligible] = useState(false)
 
   const loadPage = useCallback(async (start: number, append: boolean) => {
     const page = await fetchFeed(20, start)
@@ -46,20 +43,12 @@ export function DiscoverProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setLoading(true); setError(null)
     try {
-      const verification = await getVerificationStatus()
-      if (!isVerificationApproved(profile, verification)) {
-        setEligible(false)
-        setProfiles([])
-        setError('Approved face and ID verification is required before browsing Discover.')
-        return
-      }
-      setEligible(true)
       await loadPage(0, false)
     } catch (cause) {
       setError(cause instanceof ApiError && cause.status === 403 ? cause.message : cause instanceof Error ? cause.message : 'Could not load Discover right now.')
       setProfiles([])
     } finally { setLoading(false) }
-  }, [profile, loadPage])
+  }, [loadPage])
 
   useEffect(() => {
     if (!user || profileLoading) return
@@ -67,12 +56,12 @@ export function DiscoverProvider({ children }: { children: ReactNode }) {
   }, [user, profileLoading])
 
   const loadMore = useCallback(async () => {
-    if (!hasMore || loading || !eligible) return
+    if (!hasMore || loading) return
     setLoading(true)
     try { await loadPage(offset, true) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load more profiles.') }
     finally { setLoading(false) }
-  }, [hasMore, loading, eligible, loadPage, offset])
+  }, [hasMore, loading, loadPage, offset])
 
   const recordAction = useCallback(async (candidate: FeedProfile, action: DiscoverAction) => {
     setActionError(null)
