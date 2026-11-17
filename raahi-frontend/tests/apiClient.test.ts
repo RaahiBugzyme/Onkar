@@ -41,7 +41,10 @@ test('URL encoded login bodies retain form encoding instead of JSON encoding', a
   }
   try {
     await apiRequest('/login', { method: 'POST', body: new URLSearchParams({ username: 'user@example.test', password: 'synthetic' }) })
+    assert.equal(new URL(observed?.url ?? '').pathname, '/login')
+    assert.equal(observed?.method, 'POST')
     assert.match(observed?.headers.get('content-type') ?? '', /^application\/x-www-form-urlencoded/)
+    assert.equal(await observed?.clone().text(), 'username=user%40example.test&password=synthetic')
   } finally {
     globalThis.fetch = originalFetch
   }

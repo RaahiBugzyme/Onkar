@@ -1,6 +1,19 @@
 export const AUTH_TOKEN_KEY = 'raahi.authToken.v1'
 
-const API_BASE_URL = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+type ClientImportMeta = ImportMeta & {
+  env?: {
+    VITE_API_BASE_URL?: string
+    DEV?: boolean
+    PROD?: boolean
+  }
+}
+
+const clientEnv = (import.meta as ClientImportMeta).env
+const configuredApiBaseUrl = clientEnv?.VITE_API_BASE_URL?.trim()
+const developmentApiBaseUrl = clientEnv?.DEV === true || clientEnv?.PROD !== true
+  ? 'http://localhost:8000'
+  : ''
+const API_BASE_URL = (configuredApiBaseUrl || developmentApiBaseUrl).replace(/\/$/, '')
 
 export class ApiError extends Error {
   status: number
@@ -39,6 +52,9 @@ export function clearAuthToken() {
 }
 
 export function apiUrl(path: string) {
+  if (!API_BASE_URL) {
+    throw new Error('VITE_API_BASE_URL must be configured for production.')
+  }
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
