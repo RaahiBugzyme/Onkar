@@ -76,6 +76,7 @@ ALLOWED_ORIGINS = [
     for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")
     if o.strip()
 ]
+PRODUCTION_MODE = os.getenv("RAAHI_ENVIRONMENT", "development").strip().lower() == "production"
 
 IDLE_TIMEOUT = 70
 ALLOWED_MESSAGE_REACTIONS = frozenset({"❤️", "😂", "👍", "🔥", "😮", "😢"})
@@ -274,18 +275,23 @@ def ensure_user_profile_columns(connection):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-
-    with engine.connect() as connection:
-        ensure_message_schema_columns(connection)
-        ensure_user_profile_columns(connection)
-
-    with SessionLocal() as db:
-        db.query(models.User).update(
-            {models.User.is_online: False},
-            synchronize_session=False
+    if PRODUCTION_MODE:
+        logger.info(
+            "Production schema is managed by Alembic; skipping startup schema and data mutations"
         )
-        db.commit()
+    else:
+        Base.metadata.create_all(bind=engine)
+
+        with engine.connect() as connection:
+            ensure_message_schema_columns(connection)
+            ensure_user_profile_columns(connection)
+
+        with SessionLocal() as db:
+            db.query(models.User).update(
+                {models.User.is_online: False},
+                synchronize_session=False
+            )
+            db.commit()
 
     yield
 
