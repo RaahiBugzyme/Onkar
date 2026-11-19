@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link, NavLink, useParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 import { AccountAccess } from '../components/AccountAccess'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
@@ -255,18 +255,6 @@ export function MatchesPage() {
             )}
           </section>
         </div>
-
-        {/* Bottom Tab Navigation */}
-        <nav className="matches-bottom-bar" aria-label="Bottom Navigation">
-          <NavLink to="/matches" className="bottom-bar-link active">
-            <span className="bottom-bar-icon" aria-hidden="true">💖</span>
-            <span>Matches</span>
-          </NavLink>
-          <NavLink to="/conversations" className="bottom-bar-link">
-            <span className="bottom-bar-icon" aria-hidden="true">💬</span>
-            <span>Chat</span>
-          </NavLink>
-        </nav>
       </div>
 
       {/* Match Celebration Modal */}
@@ -726,18 +714,6 @@ export function ConversationsPage() {
             </div>
           </section>
         </div>
-
-        {/* Bottom Tab Navigation */}
-        <nav className="matches-bottom-bar" aria-label="Bottom Navigation">
-          <NavLink to="/conversations" className="bottom-bar-link active">
-            <span className="bottom-bar-icon" aria-hidden="true">💬</span>
-            <span>Matches</span>
-          </NavLink>
-          <NavLink to="/settings" className="bottom-bar-link">
-            <span className="bottom-bar-icon" aria-hidden="true">⚙</span>
-            <span>Settings</span>
-          </NavLink>
-        </nav>
       </div>
     </PageContainer>
   )

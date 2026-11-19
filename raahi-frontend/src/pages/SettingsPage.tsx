@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useAuth } from '../state/AuthContext'
-import { generationThemes } from '../data/generations'
+import { generationThemes, type GenerationId } from '../data/generations'
 import { readDemoProfile, writeDemoProfile } from '../data/userProfile'
 import { useTheme } from '../state/ThemeContext'
 import { getBlockedUsers, unblockUser, resetAllDemoData } from '../data/demoAppData'
 import './settings.css'
 
 export function SettingsPage() {
-  const { generation } = useTheme()
+  const { generation, setGeneration } = useTheme()
   const { user, updateUser, logout } = useAuth()
   const navigate = useNavigate()
 
@@ -350,14 +350,59 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="settings-row">
-            <div className="settings-row-icon" aria-hidden="true">{theme.emoji}</div>
-            <div className="settings-row-info">
-              <span className="settings-row-title">Active Era Theme</span>
-              <span className="settings-row-desc">{theme.name} palette · {theme.primary}</span>
+          <div className="settings-theme-section">
+            <div className="settings-row">
+              <div className="settings-row-icon" aria-hidden="true">{theme.emoji}</div>
+              <div className="settings-row-info">
+                <span className="settings-row-title">Active Era Theme</span>
+                <span className="settings-row-desc">{theme.name} palette · {theme.eraDescription.split('·')[0].trim()}</span>
+              </div>
+              <div className="settings-row-ctrl">
+                <span className="settings-status-pill" style={{ color: theme.primary, borderColor: theme.cardBorder }}>
+                  {theme.name}
+                </span>
+              </div>
             </div>
-            <div className="settings-row-ctrl">
-              <span className="settings-status-pill">{theme.name}</span>
+
+            <div className="settings-theme-grid" role="radiogroup" aria-label="Choose application theme">
+              {(Object.keys(generationThemes) as GenerationId[]).map(themeId => {
+                const item = generationThemes[themeId]
+                const isSelected = generation === themeId
+                return (
+                  <button
+                    key={themeId}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    className={`settings-theme-option${isSelected ? ' selected' : ''}`}
+                    onClick={() => {
+                      setGeneration(themeId)
+                      showToast(`Switched to ${item.name} theme ✨`)
+                    }}
+                    style={{
+                      '--opt-primary': item.primary,
+                      '--opt-secondary': item.secondary,
+                      '--opt-glow': item.glow,
+                      '--opt-bg': item.background,
+                      '--opt-border': item.cardBorder,
+                    } as React.CSSProperties}
+                  >
+                    <div className="theme-option-top">
+                      <span className="theme-option-emoji">{item.emoji}</span>
+                      <span className="theme-option-radio" aria-hidden="true">
+                        {isSelected && <span className="theme-option-radio-dot" />}
+                      </span>
+                    </div>
+                    <strong className="theme-option-name">{item.name}</strong>
+                    <div className="theme-option-swatches" aria-hidden="true">
+                      <span className="theme-swatch" style={{ background: item.primary }} />
+                      <span className="theme-swatch" style={{ background: item.secondary }} />
+                      <span className="theme-swatch" style={{ background: item.background }} />
+                    </div>
+                    <small className="theme-option-tags">{item.eraTags.slice(0, 2).join(' · ')}</small>
+                  </button>
+                )
+              })}
             </div>
           </div>
         </div>

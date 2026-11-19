@@ -6,6 +6,8 @@ import { ProfilePage } from './pages/ProfilePage'
 import { DiscoverPage, DiscoverProfilePage, DemoMatchPage } from './pages/DiscoverPages'
 import { ConversationPage, ConversationsPage, MatchDetailPage, MatchesPage } from './pages/MatchesPages'
 import { SettingsPage } from './pages/SettingsPage'
+import { PrivacySafetyPage } from './pages/PrivacySafetyPage'
+import { HelpSupportPage } from './pages/HelpSupportPage'
 import { DiscoverRouteProvider } from './state/DiscoverContext'
 import { ThemeProvider } from './state/ThemeContext'
 import { AuthProvider } from './state/AuthContext'
@@ -49,6 +51,8 @@ export default function App() {
             <Route path="/profile/create" element={<ProfilePage />} />
             <Route path="/profile/edit" element={<ProfilePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/privacy" element={<PrivacySafetyPage />} />
+            <Route path="/help" element={<HelpSupportPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

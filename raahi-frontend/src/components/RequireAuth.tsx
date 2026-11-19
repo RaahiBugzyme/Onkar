@@ -13,7 +13,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
       location.pathname.startsWith('/discover') ||
       location.pathname.startsWith('/matches') ||
       location.pathname.startsWith('/profile') ||
-      location.pathname.startsWith('/settings')
+      location.pathname.startsWith('/settings') ||
+      location.pathname.startsWith('/privacy') ||
+      location.pathname.startsWith('/help')
     ) {
       return children
     }

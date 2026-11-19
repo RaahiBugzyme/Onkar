@@ -196,13 +196,8 @@ export function ProfilePage() {
 
       setSavedProfile(merged)
       setDraft(toDraft(merged))
-      setGeneration(merged.era)
     }
-  }, [user, backendProfile, setGeneration])
-
-  useEffect(() => {
-    if (savedProfile) setGeneration(savedProfile.era)
-  }, [savedProfile, setGeneration])
+  }, [user, backendProfile])
 
   function updateField<K extends keyof DemoProfileDraft>(field: K, value: DemoProfileDraft[K]) {
     setDraft(previous => ({ ...previous, [field]: value }))
@@ -416,7 +411,6 @@ export function ProfilePage() {
 
   function cancelEdit() {
     setDraft(toDraft(savedProfile))
-    if (savedProfile) setGeneration(savedProfile.era)
     setErrors({})
     setFormMessage('')
     navigate('/profile')
