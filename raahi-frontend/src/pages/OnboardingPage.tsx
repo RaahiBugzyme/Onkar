@@ -117,15 +117,47 @@ export default function OnboardingPage() {
       <p className="onboarding-flow-kicker">STEP {stepIndex + 1} OF 4</p>
       {step === 'era' && <>
         <h1>Pick your era, bestie <span className="e e-wiggle">👾</span></h1><p className="onboarding-flow-sub">Choose the energy that feels most like you.</p>
-        <div className="onboarding-choice-grid fiu">{(Object.keys(generationThemes) as GenerationId[]).map(id => {
+        <div className="onboarding-choice-grid fiu" role="radiogroup" aria-label="Pick your era">{(Object.keys(generationThemes) as GenerationId[]).map(id => {
           const theme = generationThemes[id]
-          return <button type="button" key={id} onClick={() => { updateDraft({ era: id }); setGeneration(id) }} className={`onboarding-choice era-choice interactive-tap ${selectedEra === id ? 'selected' : ''}`}><span className={`choice-emoji e ${theme.emojiAnimation}`}>{theme.emoji}</span><strong>{theme.name}</strong><small>{theme.eraDescription}</small><span className="choice-tags">{theme.eraTags.join(' · ')}</span></button>
+          return <button
+            type="button"
+            role="radio"
+            aria-checked={selectedEra === id}
+            key={id}
+            onClick={() => { updateDraft({ era: id }); setGeneration(id) }}
+            className={`onboarding-choice era-choice interactive-tap ${selectedEra === id ? 'selected' : ''}`}
+            data-era={id}
+          >
+            <span className="match-emoji-wrap-v3"><span className={`choice-emoji e ${theme.emojiAnimation}`}>{theme.emoji}</span></span>
+            <span className="match-info-v3">
+              <strong className="match-name-v3">{theme.name}</strong>
+              <small className="match-desc-v3">{theme.eraDescription}</small>
+              <span className="choice-tags">{theme.eraTags.join(' · ')}</span>
+            </span>
+            <span className="match-radio-v3" aria-hidden="true" />
+          </button>
         })}</div>
         <button className="onboarding-flow-primary btn-cta" disabled={!draft.era && !profile?.era} onClick={() => next('situationship')}>Next <span className="btn-arrow">→</span></button>
       </>}
       {step === 'situationship' && <>
         <h1>{selectedTheme.vibeTitle} <span className={`e ${selectedTheme.vibeHeadingAnimation}`}>{selectedTheme.vibeHeadingEmoji}</span></h1><p className="onboarding-flow-sub">{selectedTheme.vibeSubtitle}</p>
-        <div className="onboarding-choice-grid fiu">{selectedTheme.vibes.map(vibe => <button type="button" key={vibe.name} onClick={() => updateDraft({ vibe: vibe.name })} className={`onboarding-choice vibe-choice interactive-tap ${draft.vibe === vibe.name ? 'selected' : ''}`}><span className={`choice-emoji e ${vibe.animation}`}>{vibe.icon}</span><strong>{vibe.name}</strong><small>{vibe.description}</small></button>)}</div>
+        <div className="onboarding-choice-grid fiu" role="radiogroup" aria-label={selectedTheme.vibeTitle}>{selectedTheme.vibes.map(vibe => (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={draft.vibe === vibe.name}
+            key={vibe.name}
+            onClick={() => updateDraft({ vibe: vibe.name })}
+            className={`onboarding-choice vibe-choice interactive-tap ${draft.vibe === vibe.name ? 'selected' : ''}`}
+          >
+            <span className="match-emoji-wrap-v3"><span className={`choice-emoji e ${vibe.animation}`}>{vibe.icon}</span></span>
+            <span className="match-info-v3">
+              <strong className="match-name-v3">{vibe.name}</strong>
+              <small className="match-desc-v3">{vibe.description}</small>
+            </span>
+            <span className="match-radio-v3" aria-hidden="true" />
+          </button>
+        ))}</div>
         <div className="onboarding-flow-actions"><button className="onboarding-flow-secondary" onClick={() => next('era')}>← Back</button><button className="onboarding-flow-primary btn-cta" disabled={!draft.vibe && !profile?.vibe_tag} onClick={() => next('preferences')}>Next <span className="btn-arrow">→</span></button></div>
       </>}
       {step === 'preferences' && <>
@@ -154,7 +186,7 @@ export default function OnboardingPage() {
           <label>Preferred match era<select value={draft.matchEra ?? matchEra} onChange={e => updateDraft({ matchEra: e.currentTarget.value })}><option value="any">Open to any era</option><option value="genz">Gen Z</option><option value="zillenial">Zillenial</option><option value="millennial">Millennial</option></select></label>
           <label>Profile photos<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={e => setPhotos(Array.from(e.currentTarget.files ?? []))} /></label>
           {photoProgress > 0 && <p role="status">Photo upload: {photoProgress}%</p>}
-          <p className="onboarding-flow-privacy">Interests are not currently supported by the profile API, so they are not collected as if they could be saved. Photos are private to your own profile until backend visibility is provided.</p>
+          <p className="onboarding-flow-privacy">Photos are saved to your profile and displayed to matches. You can customize your full interests, profession, and education on your Profile page.</p>
           {error && <p className="onboarding-flow-error" role="alert">{error}</p>}{success && <p role="status">{success}</p>}
           <div className="onboarding-flow-actions"><button type="button" className="onboarding-flow-secondary" onClick={() => next('preferences')}>← Back</button><button className="onboarding-flow-primary" disabled={busy}>{busy ? 'Saving…' : 'Save & continue'}</button></div>
         </form>

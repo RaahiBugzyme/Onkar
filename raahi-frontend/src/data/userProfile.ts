@@ -12,9 +12,13 @@ export interface DemoUserProfile {
   bio: string
   vibe: string
   lookingFor: MatchEraId
+  profession?: string | null
+  education?: string | null
+  relationshipIntentions?: string | null
   interests: string[]
   photos: string[]
-  verificationStatus: 'not_verified'
+  photoIds?: number[]
+  verificationStatus: 'not_verified' | 'pending' | 'verified' | 'rejected'
   createdAt: string
   updatedAt: string
 }
@@ -24,7 +28,9 @@ export type DemoProfileDraft = Omit<DemoUserProfile, 'id' | 'verificationStatus'
 export function blankProfileDraft(): DemoProfileDraft {
   return {
     name: '', age: 18, city: '', era: 'genz', bio: '',
-    vibe: 'Situationship', lookingFor: 'any', interests: [], photos: [],
+    vibe: 'Situationship', lookingFor: 'any',
+    profession: '', education: '', relationshipIntentions: 'long_term',
+    interests: [], photos: [], photoIds: [],
   }
 }
 

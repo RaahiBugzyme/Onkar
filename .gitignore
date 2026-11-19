@@ -103,8 +103,13 @@ Thumbs.db
 !**/.vscode/settings.json
 **/.idea/
 **/.claude/
+.agent/
 *.swp
 *.swo
+
+# Exclude standalone un-routed search files
+raahi-frontend/src/pages/SearchPage.tsx
+raahi-frontend/src/styles/search.css
 
 # Internal development and audit reports
 /RAAHI_*.md

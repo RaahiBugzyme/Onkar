@@ -29,6 +29,8 @@ EXPECTED_PARENTS = {
     "8e31a47c9d20": "f62a9c31e7b4",
     "93b7e4c18a62": "f62a9c31e7b4",
     "ca7f31d2b904": ("8e31a47c9d20", "93b7e4c18a62"),
+    "b1e2c3d4f5a6": "ca7f31d2b904",
+    "c2f3a4e5b6c7": "b1e2c3d4f5a6",
 }
 
 
@@ -39,7 +41,7 @@ class MigrationChainStructureTests(unittest.TestCase):
         revisions = {revision.revision: revision for revision in script.walk_revisions()}
 
         self.assertEqual(set(revisions), set(EXPECTED_PARENTS))
-        self.assertEqual(script.get_heads(), ["ca7f31d2b904"])
+        self.assertEqual(script.get_heads(), ["c2f3a4e5b6c7"])
         self.assertEqual(script.get_base(), "0ab4c9d72e61")
         for revision_id, expected_parent in EXPECTED_PARENTS.items():
             with self.subTest(revision=revision_id):

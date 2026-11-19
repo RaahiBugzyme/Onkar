@@ -1,5 +1,5 @@
-import type { GenerationId } from './generations'
-import { TWENTY_DEMO_PROFILES } from './demoProfiles'
+import type { GenerationId } from './generations.ts'
+import { TWENTY_DEMO_PROFILES } from './demoProfiles.ts'
 
 export interface DemoCandidate {
   id: number
@@ -71,8 +71,8 @@ export const INITIAL_DEMO_CANDIDATES: DemoCandidate[] = TWENTY_DEMO_PROFILES.map
   compatibilityScore: null,
 }))
 
-const DEMO_STATE_KEY = 'raahi_demo_app_state_v2'
-const DEMO_BLOCKED_KEY = 'raahi_demo_blocked_users_v2'
+const DEMO_STATE_KEY = 'raahi_demo_app_state_v3'
+const DEMO_BLOCKED_KEY = 'raahi_demo_blocked_users_v3'
 
 interface DemoAppState {
   candidates: DemoCandidate[]
@@ -85,18 +85,26 @@ function loadDemoAppState(): DemoAppState {
     const raw = localStorage.getItem(DEMO_STATE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as DemoAppState
-      if (Array.isArray(parsed.candidates) && parsed.candidates.length >= 20 && parsed.swipedIds) {
+      if (Array.isArray(parsed.candidates) && parsed.swipedIds) {
+        if (parsed.candidates.length < INITIAL_DEMO_CANDIDATES.length) {
+          const existingIds = new Set(parsed.candidates.map(c => c.id))
+          const missing = INITIAL_DEMO_CANDIDATES.filter(c => !existingIds.has(c.id))
+          parsed.candidates = [...parsed.candidates, ...missing]
+          saveDemoAppState(parsed)
+        }
         return parsed
       }
     }
   } catch {
     // fallback
   }
-  return {
+  const state: DemoAppState = {
     candidates: INITIAL_DEMO_CANDIDATES,
     swipedIds: {},
     lastPassedId: null,
   }
+  saveDemoAppState(state)
+  return state
 }
 
 function saveDemoAppState(state: DemoAppState) {
@@ -125,14 +133,20 @@ export function swipeDemoCandidate(candidateId: number, action: 'like' | 'pass' 
     return { isMatch: false, candidate }
   }
 
-  // Like or Superlike: candidates with IDs 906, 908, 910, 911, 916, 918 match back, or any superlike!
+  // Like or Superlike: candidates with IDs 903, 905, 906, 908, 910, 911, 916, 918, 921, 924, 926, 930 match back, or any superlike!
   const isMutual =
+    candidate.id === 903 ||
+    candidate.id === 905 ||
     candidate.id === 906 ||
     candidate.id === 908 ||
     candidate.id === 910 ||
     candidate.id === 911 ||
     candidate.id === 916 ||
     candidate.id === 918 ||
+    candidate.id === 921 ||
+    candidate.id === 924 ||
+    candidate.id === 926 ||
+    candidate.id === 930 ||
     action === 'superlike'
 
   if (isMutual) {
@@ -145,6 +159,19 @@ export function swipeDemoCandidate(candidateId: number, action: 'like' | 'pass' 
 
   saveDemoAppState(state)
   return { isMatch: isMutual, candidate }
+}
+
+export function ensureDemoConversation(candidateId: number, lastMessage?: string): DemoCandidate | null {
+  const state = loadDemoAppState()
+  const candidate = state.candidates.find(c => c.id === candidateId)
+  if (!candidate) return null
+  candidate.isMatch = true
+  if (lastMessage) {
+    candidate.lastMessage = lastMessage
+    candidate.lastMessageTime = 'Just now'
+  }
+  saveDemoAppState(state)
+  return candidate
 }
 
 export function rewindLastPass(): DemoCandidate | null {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDatingProfile, getMyDatingProfile, type DatingProfile } from '../src/api/datingProfile.ts'
+import { createDatingProfile, getMyDatingProfile, updateDatingProfile, deleteProfilePhoto, type DatingProfile } from '../src/api/datingProfile.ts'
 import { setAuthToken, clearAuthToken } from '../src/api/client.ts'
 import { registerAccount } from '../src/api/accounts.ts'
 import { postAuthenticationDestination } from '../src/routing/onboardingDestination.ts'
@@ -86,4 +86,56 @@ test('registration uses the existing backend account creation contract', async (
 test('authenticated users without a profile resume onboarding; complete profile can enter with pending verification', () => {
   assert.equal(postAuthenticationDestination(null), '/onboarding/era')
   assert.equal(postAuthenticationDestination(profile), '/discover')
+})
+
+test('updateDatingProfile persists extended dating fields to PUT /api/v1/profile/me', async () => {
+  const originalFetch = globalThis.fetch
+  setAuthToken('synthetic-jwt')
+  let request: Request | undefined
+  const updatedResponse = {
+    ...profile,
+    profession: 'Architect',
+    education: 'CEPT University',
+    relationship_intentions: 'Long-term relationship',
+    interests: ['Design', 'Pottery', 'Film'],
+  }
+  globalThis.fetch = async (input, init) => {
+    request = new Request(input, init)
+    return Response.json(updatedResponse)
+  }
+  try {
+    const input = {
+      profession: 'Architect',
+      education: 'CEPT University',
+      relationship_intentions: 'Long-term relationship',
+      interests: ['Design', 'Pottery', 'Film'],
+    }
+    const result = await updateDatingProfile(input)
+    assert.deepEqual(result, updatedResponse)
+    assert.equal(new URL(request!.url).pathname, '/api/v1/profile/me')
+    assert.equal(request!.method, 'PUT')
+    assert.deepEqual(await request!.clone().json(), input)
+  } finally {
+    globalThis.fetch = originalFetch
+    clearAuthToken()
+  }
+})
+
+test('deleteProfilePhoto sends DELETE request to /api/v1/profile/photos/:photoId', async () => {
+  const originalFetch = globalThis.fetch
+  setAuthToken('synthetic-jwt')
+  let request: Request | undefined
+  globalThis.fetch = async (input, init) => {
+    request = new Request(input, init)
+    return Response.json({ deleted: true })
+  }
+  try {
+    const result = await deleteProfilePhoto(42)
+    assert.deepEqual(result, { deleted: true })
+    assert.equal(new URL(request!.url).pathname, '/api/v1/profile/photos/42')
+    assert.equal(request!.method, 'DELETE')
+  } finally {
+    globalThis.fetch = originalFetch
+    clearAuthToken()
+  }
 })

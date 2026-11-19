@@ -1,19 +1,28 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { ApiError } from '../api/client.ts'
+import { ApiError } from '../api/client'
 import { registerAccount } from '../api/accounts'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
+import { PhoneAuth } from '../components/PhoneAuth'
 import { useAuth } from '../state/AuthContext'
 import { useDatingProfile } from '../state/DatingProfileContext'
 import { postAuthenticationDestination } from '../routing/onboardingDestination'
 import { RaahiWordmark } from '../components/RaahiWordmark'
+import { getGoogleAuthUrl } from '../api/auth'
+
+const googleGIcon = new URL('../assets/google-g.svg', import.meta.url).href
 
 export function RegisterPage() {
-  const { user, loading, login, updateUser, logout } = useAuth()
+  const { user, loading, login, updateUser, logout, loginWithToken } = useAuth()
   const { loading: profileLoading, setProfile, refreshProfile } = useDatingProfile()
   const navigate = useNavigate()
+
+  const [authMethod, setAuthMethod] = useState<'email' | 'phone'>('email')
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [googleError, setGoogleError] = useState('')
+
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
@@ -51,17 +60,54 @@ export function RegisterPage() {
     return () => { active = false }
   }, [user, busy, refreshProfile])
 
+  async function handleGoogleSignUp() {
+    setGoogleError('')
+    setGoogleLoading(true)
+    try {
+      const data = await getGoogleAuthUrl()
+      if (data.authorization_url) {
+        window.location.href = data.authorization_url
+      } else {
+        setGoogleError('Could not retrieve Google authorization URL.')
+      }
+    } catch (cause) {
+      setGoogleError(cause instanceof ApiError ? cause.message : 'Google sign-up is not available right now. Please register with email or phone.')
+    } finally {
+      setGoogleLoading(false)
+    }
+  }
+
   if (loading || (user && profileLoading)) return <LoadingState label="Preparing your Raahi account…" />
   if (user && busy) return <LoadingState label="Setting up your Raahi account…" />
   if (user && checkingDestination && !error) return <LoadingState label="Checking your profile status…" />
 
-  if (user) return <PageContainer className="matches-page"><Card className="matches-empty-card matches-auth-card register-auth-card">
-    <div className="register-branding"><RaahiWordmark className="register-wordmark" /><span>NO GHOSTING. JUST VIBES.</span></div>
-    <p className="integration-eyebrow">ACCOUNT SESSION</p><h1>You’re already signed in</h1><p>Signed in as <strong>{user.full_name || user.username}</strong>.</p>
-    {error && <><p className="chat-error" role="alert">{error}</p><button type="button" className="matches-outline-button" onClick={() => void retryDestinationCheck()}>Retry account check</button></>}
-    {destination && <button type="button" className="matches-primary-button" onClick={() => navigate(destination, { replace: true })}>Continue to your account</button>}
-    <button type="button" className="matches-outline-button login-switch-account" onClick={logout}>Sign out to create another account</button>
-  </Card></PageContainer>
+  if (user) return (
+    <PageContainer className="matches-page matches-auth-page">
+      <Card className="matches-empty-card matches-auth-card register-auth-card">
+        <div className="register-branding">
+          <RaahiWordmark className="register-wordmark" />
+          <span>NO GHOSTING. JUST VIBES.</span>
+        </div>
+        <p className="integration-eyebrow">ACCOUNT SESSION</p>
+        <h1>You’re already signed in</h1>
+        <p>Signed in as <strong>{user.full_name || user.username}</strong>.</p>
+        {error && (
+          <>
+            <p className="chat-error" role="alert">{error}</p>
+            <button type="button" className="matches-outline-button" onClick={() => void retryDestinationCheck()}>Retry account check</button>
+          </>
+        )}
+        {destination && (
+          <button type="button" className="matches-primary-button" onClick={() => navigate(destination, { replace: true })}>
+            Continue to your account
+          </button>
+        )}
+        <button type="button" className="matches-outline-button login-switch-account" onClick={logout}>
+          Sign out to create another account
+        </button>
+      </Card>
+    </PageContainer>
+  )
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -95,19 +141,80 @@ export function RegisterPage() {
     }
   }
 
-  return <PageContainer className="matches-page page-enter"><Card className="matches-empty-card matches-auth-card register-auth-card card-enter">
-    <div className="register-branding"><RaahiWordmark className="register-wordmark" /><span>NO GHOSTING. JUST VIBES.</span></div>
-    <p className="integration-eyebrow">YOUR NEXT CHAPTER</p>
-    <h1>Create your Raahi account</h1>
-    <p>One account for your profile, matches and conversations.</p>
-    <form className="account-login-form" onSubmit={submit}>
-      <label>Name<input type="text" autoComplete="name" minLength={2} maxLength={80} value={name} onChange={event => setName(event.currentTarget.value)} required /></label>
-      <label>Username<input type="text" autoComplete="username" minLength={3} maxLength={30} pattern="[A-Za-z0-9_.-]+" value={username} onChange={event => setUsername(event.currentTarget.value)} required /></label>
-      <label>Email<input type="email" autoComplete="email" maxLength={254} value={email} onChange={event => setEmail(event.currentTarget.value)} required /></label>
-      <label>Password<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={event => setPassword(event.currentTarget.value)} required /></label>
-      {error && <p className="chat-error" role="alert">{error}</p>}
-      <button type="submit" className="matches-primary-button" disabled={busy}>{busy ? 'Creating your account…' : 'Create account'}</button>
-    </form>
-    <p className="chat-muted">Already have an account? <Link to="/login">Log in</Link></p>
-  </Card></PageContainer>
+  return (
+    <PageContainer className="matches-page matches-auth-page page-enter">
+      <Card className="matches-empty-card matches-auth-card register-auth-card card-enter">
+        <div className="register-branding">
+          <RaahiWordmark className="register-wordmark" />
+          <span>NO GHOSTING. JUST VIBES.</span>
+        </div>
+        <p className="integration-eyebrow">YOUR NEXT CHAPTER</p>
+        <h1>Create your Raahi account</h1>
+        <p>One account for your profile, matches and conversations.</p>
+
+        <div className="auth-method-switcher" role="tablist" aria-label="Registration methods">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={authMethod === 'email'}
+            className={`auth-method-tab${authMethod === 'email' ? ' active' : ''}`}
+            onClick={() => setAuthMethod('email')}
+          >
+            Email & Password
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={authMethod === 'phone'}
+            className={`auth-method-tab${authMethod === 'phone' ? ' active' : ''}`}
+            onClick={() => setAuthMethod('phone')}
+          >
+            Phone SMS OTP
+          </button>
+        </div>
+
+        {googleError && <p className="chat-error" role="alert" style={{ margin: '8px 0' }}>{googleError}</p>}
+
+        {authMethod === 'email' ? (
+          <form className="account-login-form" onSubmit={submit}>
+            <label>Name<input type="text" autoComplete="name" minLength={2} maxLength={80} value={name} onChange={event => setName(event.currentTarget.value)} required /></label>
+            <label>Username<input type="text" autoComplete="username" minLength={3} maxLength={30} pattern="[A-Za-z0-9_.-]+" value={username} onChange={event => setUsername(event.currentTarget.value)} required /></label>
+            <label>Email<input type="email" autoComplete="email" maxLength={254} value={email} onChange={event => setEmail(event.currentTarget.value)} required /></label>
+            <label>Password<input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={event => setPassword(event.currentTarget.value)} required /></label>
+            {error && <p className="chat-error" role="alert">{error}</p>}
+            <button type="submit" className="matches-primary-button" disabled={busy}>{busy ? 'Creating your account…' : 'Create account'}</button>
+          </form>
+        ) : (
+          <PhoneAuth
+            isRegistration={true}
+            onSuccess={async (token, isNewUser) => {
+              await loginWithToken(token)
+              setProfile(null)
+              navigate(isNewUser ? '/onboarding/era' : '/discover', { replace: true })
+            }}
+            onSwitchToEmail={() => setAuthMethod('email')}
+          />
+        )}
+
+        <div style={{ margin: '14px 0 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,.12)' }} />
+          <span style={{ fontSize: '.72rem', color: 'rgba(255,255,255,.45)', textTransform: 'uppercase', letterSpacing: '.1em' }}>or</span>
+          <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,.12)' }} />
+        </div>
+
+        <button
+          type="button"
+          className="login-google-button"
+          disabled={googleLoading}
+          onClick={() => void handleGoogleSignUp()}
+        >
+          <img src={googleGIcon} alt="" aria-hidden="true" />
+          {googleLoading ? 'Connecting to Google…' : 'Continue with Google'}
+        </button>
+
+        <p className="login-signup-copy">Already have an account? <Link to="/login">Log in</Link></p>
+        <Link className="matches-back-link login-back-link" to="/">Back to Raahi home</Link>
+      </Card>
+    </PageContainer>
+  )
 }

@@ -7,6 +7,8 @@ export interface CurrentUser {
   full_name: string | null
   bio: string | null
   email: string
+  phone_number?: string | null
+  auth_provider?: string
   ai_memory_enabled: boolean
   ai_provider_processing_enabled: boolean
   activity_status_enabled: boolean
@@ -16,6 +18,7 @@ interface AuthContextValue {
   user: CurrentUser | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
+  loginWithToken: (token: string) => Promise<void>
   logout: () => void
   refreshUser: () => Promise<void>
   updateUser: (changes: Partial<Pick<CurrentUser, 'full_name' | 'bio' | 'ai_memory_enabled' | 'ai_provider_processing_enabled' | 'activity_status_enabled'>>) => Promise<void>
@@ -65,12 +68,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const loginWithToken = useCallback(async (token: string) => {
+    setAuthToken(token)
+    try {
+      const current = await apiRequest<CurrentUser>('/me')
+      setUser(current)
+    } catch (error) {
+      clearAuthToken()
+      throw error
+    }
+  }, [])
+
   const updateUser = useCallback(async (changes: Partial<Pick<CurrentUser, 'full_name' | 'bio' | 'ai_memory_enabled' | 'ai_provider_processing_enabled' | 'activity_status_enabled'>>) => {
     const current = await apiRequest<CurrentUser>('/me', { method: 'PATCH', body: JSON.stringify(changes) })
     setUser(current)
   }, [])
 
-  const value = useMemo(() => ({ user, loading, login, logout, refreshUser, updateUser }), [user, loading, login, logout, refreshUser, updateUser])
+  const value = useMemo(() => ({ user, loading, login, loginWithToken, logout, refreshUser, updateUser }), [user, loading, login, loginWithToken, logout, refreshUser, updateUser])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 

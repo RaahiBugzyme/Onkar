@@ -11,8 +11,10 @@ import { ThemeProvider } from './state/ThemeContext'
 import { AuthProvider } from './state/AuthContext'
 import { RequireAuth } from './components/RequireAuth'
 import { LoginPage } from './pages/LoginPage'
-import { DatingProfileProvider } from './state/DatingProfileContext'
 import { RegisterPage } from './pages/RegisterPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
+import { DatingProfileProvider } from './state/DatingProfileContext'
 import VerificationPage from './pages/VerificationPage'
 
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
@@ -27,6 +29,9 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/auth/google/callback" element={<LoginPage />} />
           <Route path="/verification" element={<RequireAuth><VerificationPage /></RequireAuth>} />
           <Route path="/onboarding" element={<RequireAuth><Navigate to="/onboarding/era" replace /></RequireAuth>} />
           <Route path="/onboarding/:step" element={<RequireAuth><Suspense fallback={null}><OnboardingPage /></Suspense></RequireAuth>} />

@@ -5,6 +5,8 @@ export interface PublicUser {
   username: string
   full_name: string | null
   bio: string | null
+  photo_url?: string | null
+  photos?: string[]
   is_online: boolean
   last_seen: string | null
 }
@@ -46,7 +48,14 @@ export interface ChatMessage {
 export interface MatchItem {
   id: number
   chat_id: number
-  matched_user: { id: number | null; username: string | null; full_name: string | null; bio: string | null }
+  matched_user: {
+    id: number | null
+    username: string | null
+    full_name: string | null
+    bio: string | null
+    photo_url?: string | null
+    photos?: string[]
+  }
   compatibility_score: number
   compatibility_score_status: 'legacy_placeholder'
   profile_alignment: { score: number | null; confidence: number | null; adjusted_score: number | null; package_version: string | null; engine_version: string | null; score_type: 'profile_alignment'; is_success_probability: false; weights_validated: boolean } | null
@@ -55,6 +64,11 @@ export interface MatchItem {
   city: string | null
   era: string | null
   vibe_tag: string | null
+  profession?: string | null
+  education?: string | null
+  relationship_intentions?: string | null
+  interests?: string[]
+  photos?: string[]
 }
 
 export interface MatchDetail extends MatchItem {}

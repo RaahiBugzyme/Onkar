@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { fetchPublicProfile, type FeedProfile, type PublicProfile } from '../api/discover'
-import { ApiError } from '../api/client'
+import { ApiError, resolveMediaUrl } from '../api/client'
+import { isDemoModeEnabled } from '../utils/demoEnvironment'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
@@ -16,6 +17,7 @@ import {
   resetDemoFeed,
   getDemoCandidateById,
   hasLastPassedDemoCandidate,
+  ensureDemoConversation,
   type DemoCandidate,
 } from '../data/demoAppData'
 import '../styles/discover.css'
@@ -53,21 +55,24 @@ function normalizeFeedProfile(feed: FeedProfile): UnifiedCandidate {
   const ring = era === 'zillenial' ? '#f59e0b' : era === 'millennial' ? '#06b6d4' : '#a855f7'
   const dummySvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="100%" height="100%"><rect width="100%" height="100%" fill="%23140a28"/><circle cx="200" cy="220" r="90" fill="${encodeURIComponent(ring)}" fill-opacity="0.25"/><circle cx="200" cy="220" r="75" fill="%231e0f38" stroke="${encodeURIComponent(ring)}" stroke-width="3"/><text x="200" y="250" font-family="sans-serif" font-size="70" font-weight="bold" fill="%23ffffff" text-anchor="middle">${initial}</text></svg>`
 
+  const feedPhotos = feed.photos && feed.photos.length > 0 ? feed.photos : (feed.photo_url ? [feed.photo_url] : [dummySvg])
+  const feedInterests = feed.interests && feed.interests.length > 0 ? feed.interests : (feed.vibe_tag ? [feed.vibe_tag] : ['vibe check passed', 'genuine connection'])
+
   return {
     id: feed.user_id,
     name,
     age: feed.age ?? undefined,
     city: feed.city,
     era,
-    profession: null,
-    education: null,
+    profession: feed.profession ?? null,
+    education: feed.education ?? null,
     bio: feed.bio,
     vibeTag: feed.vibe_tag,
-    tags: feed.vibe_tag ? [feed.vibe_tag] : ['vibe check passed', 'genuine connection'],
-    relationshipIntentions: null,
+    tags: feedInterests,
+    relationshipIntentions: feed.relationship_intentions ?? null,
     completenessCategory: 'complete',
     completenessScore: 100,
-    photos: [dummySvg],
+    photos: feedPhotos,
     compatibilityScore: feed.compatibility_score != null ? Math.round(feed.compatibility_score) : null,
     isVerified: Boolean(feed.is_face_verified && feed.is_id_verified),
     isDemo: false,
@@ -182,7 +187,7 @@ function ProfileCard({
   const isSuperDrag = y < -35 && Math.abs(x) < 55
 
   const rotation = x * 0.08
-  const currentPhotoUrl = candidate.photos[activePhoto] || candidate.photos[0]
+  const currentPhotoUrl = resolveMediaUrl(candidate.photos[activePhoto] || candidate.photos[0])
   const theme = generationThemes[candidate.era] || generationThemes.genz
 
   return (
@@ -319,6 +324,7 @@ export function DiscoverPage() {
     profiles: liveProfiles,
     loading: liveLoading,
     recordAction,
+    refresh,
   } = useDiscover()
   const { generation } = useTheme()
   const navigate = useNavigate()
@@ -331,14 +337,12 @@ export function DiscoverPage() {
   const [canRewind, setCanRewind] = useState(() => hasLastPassedDemoCandidate())
   const [isRestoredRewind, setIsRestoredRewind] = useState(false)
 
-  // Use real backend candidates if user is logged in and live profiles exist; otherwise use rich demo deck
-  const isUsingLiveApi = Boolean(user && liveProfiles && liveProfiles.length > 0)
+  // In production for logged-in users, strictly use real backend candidates unless demo mode is explicitly enabled
+  const isUsingLiveApi = Boolean(user) && !isDemoModeEnabled()
 
-  const activeCandidate: UnifiedCandidate | null = isUsingLiveApi && liveProfile
-    ? normalizeFeedProfile(liveProfile)
-    : demoCandidates[0]
-      ? normalizeDemoCandidate(demoCandidates[0])
-      : null
+  const activeCandidate: UnifiedCandidate | null = isUsingLiveApi
+    ? (liveProfile ? normalizeFeedProfile(liveProfile) : null)
+    : (demoCandidates[0] ? normalizeDemoCandidate(demoCandidates[0]) : null)
 
   function showToast(message: string) {
     setFeedbackToast(message)
@@ -394,6 +398,11 @@ export function DiscoverPage() {
   }
 
   function handleResetFeed() {
+    if (isUsingLiveApi) {
+      void refresh()
+      showToast('Discover feed refreshed! ✨')
+      return
+    }
     resetDemoFeed()
     setCanRewind(false)
     setIsRestoredRewind(false)
@@ -525,8 +534,9 @@ export function DiscoverPage() {
           <p className="integration-eyebrow">YOU’RE ALL CAUGHT UP</p>
           <h2>No more profiles right now.</h2>
           <p>
-            You’ve seen everyone in your current circle! Catch up with your matches or refresh the
-            demo deck anytime.
+            {isUsingLiveApi
+              ? "You’ve seen everyone in your current circle! Catch up with your matches or refresh your feed anytime."
+              : "You’ve seen everyone in your current circle! Catch up with your matches or refresh the demo deck anytime."}
           </p>
           <div className="discover-detail-actions" style={{ justifyContent: 'center' }}>
             <button
@@ -534,7 +544,7 @@ export function DiscoverPage() {
               className="matches-primary-button"
               onClick={handleResetFeed}
             >
-              Reset demo deck ✨
+              {isUsingLiveApi ? 'Refresh Discover 🧭' : 'Reset demo deck ✨'}
             </button>
             <button
               type="button"
@@ -621,7 +631,7 @@ export function DiscoverPage() {
               {detailsCandidate.photos.map((photo, i) => (
                 <img
                   key={i}
-                  src={photo}
+                  src={resolveMediaUrl(photo)}
                   alt={`${detailsCandidate.name} view ${i + 1}`}
                   className="modal-gallery-img"
                 />
@@ -730,13 +740,15 @@ export function DiscoverPage() {
 
 export function DiscoverProfilePage() {
   const { profileId } = useParams()
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [profile, setProfile] = useState<PublicProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0)
 
   const numId = profileId ? Number(profileId) : NaN
-  const demoCandidate = !Number.isNaN(numId) ? getDemoCandidateById(numId) : null
+  const demoCandidate = !user && !Number.isNaN(numId) ? getDemoCandidateById(numId) : null
 
   useEffect(() => {
     let active = true
@@ -778,75 +790,113 @@ export function DiscoverProfilePage() {
   if (loading) return <LoadingState label="Loading profile details…" />
 
   if (demoCandidate) {
+    const currentPhoto = resolveMediaUrl(demoCandidate.photos[activePhotoIndex] || demoCandidate.photos[0])
     return (
       <PageContainer className="discover-page page-enter">
-        <Link className="discover-back-link" to="/discover">
-          ← Back to Discover
-        </Link>
-        <div className="discover-detail-layout">
-          <div className="modal-photo-gallery" style={{ flexDirection: 'column' }}>
-            {demoCandidate.photos.map((photo, i) => (
-              <img
-                key={i}
-                src={photo}
-                alt={`${demoCandidate.name} photo ${i + 1}`}
-                style={{ width: '100%', maxWidth: 380, borderRadius: 20 }}
-              />
-            ))}
-          </div>
-          <Card className="discover-detail-copy">
-            <p className="integration-eyebrow">PROFILE DETAILS</p>
-            <h1>
-              {demoCandidate.name}
-              {demoCandidate.age ? `, ${demoCandidate.age}` : ''}
-            </h1>
-            <p className="discover-detail-meta">
-              {demoCandidate.city} · {eraLabels[demoCandidate.era] ?? demoCandidate.era}
-            </p>
-            {(demoCandidate.profession || demoCandidate.education) && (
-              <p className="discover-detail-profession" style={{ fontSize: '.88rem', color: 'rgba(235,230,250,0.85)', margin: '4px 0 12px' }}>
-                {demoCandidate.profession && <span>💼 {demoCandidate.profession}</span>}
-                {demoCandidate.profession && demoCandidate.education && <span> · </span>}
-                {demoCandidate.education && <span>🎓 {demoCandidate.education}</span>}
-              </p>
-            )}
-            {demoCandidate.relationshipIntentions && (
-              <div className="discover-detail-intentions" style={{ fontSize: '.82rem', color: '#f3e8ff', background: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.35)', borderRadius: 12, padding: '8px 14px', margin: '10px 0 14px', display: 'inline-block' }}>
-                <strong>Looking for:</strong> {demoCandidate.relationshipIntentions}
+        <div className="discover-detail-container">
+          <Link className="discover-back-link" to="/discover">
+            ← Back to Discover
+          </Link>
+
+          <div className="discover-detail-grid">
+            {/* Left Column: Responsive Photo Gallery */}
+            <div className="discover-detail-gallery">
+              <div className="discover-detail-main-img-wrap">
+                <img
+                  src={currentPhoto}
+                  alt={`${demoCandidate.name} photo ${activePhotoIndex + 1}`}
+                  className="discover-detail-main-img"
+                />
+                <span className="discover-detail-corner-badge">
+                  {eraLabels[demoCandidate.era] ?? demoCandidate.era} · {demoCandidate.city}
+                </span>
+                <span className="discover-detail-sample-badge">
+                  ✨ SAMPLE PROFILE
+                </span>
               </div>
-            )}
-            {demoCandidate.bio && <p style={{ lineHeight: 1.6, margin: '8px 0 14px' }}>{demoCandidate.bio}</p>}
-            {demoCandidate.tags && demoCandidate.tags.length > 0 && (
-              <>
-                <h2>Passions & Lifestyle</h2>
-                <div className="discover-tags" style={{ margin: '8px 0 16px' }}>
-                  {demoCandidate.tags.map((t, idx) => (
-                    <span key={idx}>{t}</span>
+
+              {demoCandidate.photos.length > 1 && (
+                <div className="discover-detail-thumb-row" aria-label="Photo gallery thumbnails">
+                  {demoCandidate.photos.map((photo, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className={`discover-detail-thumb-btn${i === activePhotoIndex ? ' active' : ''}`}
+                      onClick={() => setActivePhotoIndex(i)}
+                      aria-label={`View photo ${i + 1}`}
+                    >
+                      <img src={resolveMediaUrl(photo)} alt={`${demoCandidate.name} thumbnail ${i + 1}`} />
+                    </button>
                   ))}
                 </div>
-              </>
-            )}
-            {demoCandidate.vibeTag && (
-              <>
-                <h2>Current vibe</h2>
-                <div className="discover-tags">
-                  <span>{demoCandidate.vibeTag}</span>
-                </div>
-              </>
-            )}
-            <div className="discover-detail-actions">
-              <Link className="matches-primary-button" to={`/conversations/${demoCandidate.chatId}`}>
-                Open Chat 👋
-              </Link>
-              <button
-                type="button"
-                className="matches-outline-button"
-                onClick={() => navigate('/discover')}
-              >
-                Back to Discover
-              </button>
+              )}
             </div>
-          </Card>
+
+            {/* Right Column: Profile Information Card */}
+            <Card className="discover-detail-copy card-enter">
+              <p className="integration-eyebrow">PROFILE DETAILS</p>
+              <h1>
+                {demoCandidate.name}
+                {demoCandidate.age ? `, ${demoCandidate.age}` : ''}
+              </h1>
+              <p className="discover-detail-meta">
+                {demoCandidate.city} · {eraLabels[demoCandidate.era] ?? demoCandidate.era}
+              </p>
+
+              {(demoCandidate.profession || demoCandidate.education) && (
+                <p className="discover-detail-profession" style={{ fontSize: '.88rem', color: 'rgba(235,230,250,0.85)', margin: '4px 0 12px' }}>
+                  {demoCandidate.profession && <span>💼 {demoCandidate.profession}</span>}
+                  {demoCandidate.profession && demoCandidate.education && <span> · </span>}
+                  {demoCandidate.education && <span>🎓 {demoCandidate.education}</span>}
+                </p>
+              )}
+
+              {demoCandidate.relationshipIntentions && (
+                <div className="discover-detail-intentions" style={{ fontSize: '.82rem', color: '#f3e8ff', background: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.35)', borderRadius: 12, padding: '8px 14px', margin: '10px 0 14px', display: 'inline-block' }}>
+                  <strong>Looking for:</strong> {demoCandidate.relationshipIntentions}
+                </div>
+              )}
+
+              {demoCandidate.bio && <p style={{ lineHeight: 1.6, margin: '8px 0 14px' }}>{demoCandidate.bio}</p>}
+
+              {demoCandidate.tags && demoCandidate.tags.length > 0 && (
+                <>
+                  <h2>Passions & Lifestyle</h2>
+                  <div className="discover-tags" style={{ margin: '8px 0 16px' }}>
+                    {demoCandidate.tags.map((t, idx) => (
+                      <span key={idx}>{t}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {demoCandidate.vibeTag && (
+                <>
+                  <h2>Current vibe</h2>
+                  <div className="discover-tags">
+                    <span>{demoCandidate.vibeTag}</span>
+                  </div>
+                </>
+              )}
+
+              <div className="discover-detail-actions">
+                <Link
+                  className="matches-primary-button"
+                  to={`/conversations/${demoCandidate.chatId}`}
+                  onClick={() => ensureDemoConversation(demoCandidate.id)}
+                >
+                  Open Chat 👋
+                </Link>
+                <button
+                  type="button"
+                  className="matches-outline-button"
+                  onClick={() => navigate('/discover')}
+                >
+                  Back to Discover
+                </button>
+              </div>
+            </Card>
+          </div>
         </div>
       </PageContainer>
     )
@@ -867,40 +917,56 @@ export function DiscoverProfilePage() {
   }
 
   const name = profile.full_name || profile.username
+  const initial = name.trim()[0]?.toUpperCase() ?? 'R'
+  const eraKey = profile.era || 'genz'
   return (
     <PageContainer className="discover-page page-enter">
-      <Link className="discover-back-link" to="/discover">
-        ← Back to Discover
-      </Link>
-      <div className="discover-detail-layout">
-        <Card className="discover-detail-copy">
-          <p className="integration-eyebrow">PROFILE DETAILS</p>
-          <h1>
-            {name}
-            {profile.age ? `, ${profile.age}` : ''}
-          </h1>
-          <p className="discover-detail-meta">
-            {profile.city} · {eraLabels[profile.era]}
-          </p>
-          {profile.bio && <p>{profile.bio}</p>}
-          {profile.vibe_tag && (
-            <>
-              <h2>Current vibe</h2>
-              <div className="discover-tags">
-                <span>{profile.vibe_tag}</span>
+      <div className="discover-detail-container">
+        <Link className="discover-back-link" to="/discover">
+          ← Back to Discover
+        </Link>
+        <div className="discover-detail-grid">
+          {/* Left Column: Live Avatar Artwork */}
+          <div className="discover-detail-gallery">
+            <div className={`discover-artwork era-${eraKey}`} style={{ minHeight: 380, borderRadius: 24 }}>
+              <div className="discover-artwork-orbit" />
+              <div className="discover-avatar e-float">
+                <span>{initial}</span>
               </div>
-            </>
-          )}
-          <div className="discover-detail-actions">
-            <button
-              type="button"
-              className="matches-outline-button"
-              onClick={() => navigate('/discover')}
-            >
-              Back to Discover
-            </button>
+              <span className="discover-artwork-note">✦ Verified Raahi Member</span>
+            </div>
           </div>
-        </Card>
+
+          {/* Right Column: Live Profile Info */}
+          <Card className="discover-detail-copy card-enter">
+            <p className="integration-eyebrow">PROFILE DETAILS</p>
+            <h1>
+              {name}
+              {profile.age ? `, ${profile.age}` : ''}
+            </h1>
+            <p className="discover-detail-meta">
+              {profile.city} · {eraLabels[profile.era] ?? profile.era}
+            </p>
+            {profile.bio && <p style={{ lineHeight: 1.6, margin: '10px 0' }}>{profile.bio}</p>}
+            {profile.vibe_tag && (
+              <>
+                <h2>Current vibe</h2>
+                <div className="discover-tags">
+                  <span>{profile.vibe_tag}</span>
+                </div>
+              </>
+            )}
+            <div className="discover-detail-actions">
+              <button
+                type="button"
+                className="matches-outline-button"
+                onClick={() => navigate('/discover')}
+              >
+                Back to Discover
+              </button>
+            </div>
+          </Card>
+        </div>
       </div>
     </PageContainer>
   )

@@ -12,12 +12,21 @@ import {
   type DemoProfileDraft,
   type DemoUserProfile,
 } from '../data/userProfile'
+import { useAuth } from '../state/AuthContext'
+import { useDatingProfile } from '../state/DatingProfileContext'
 import { useTheme } from '../state/ThemeContext'
+import {
+  updateDatingProfile,
+  createDatingProfile,
+  uploadProfilePhoto,
+  deleteProfilePhoto,
+  type DatingEra,
+} from '../api/datingProfile'
+import { resolveMediaUrl } from '../api/client'
 import './profile.css'
 
 const MAX_PHOTOS = 4
-const MAX_PHOTO_BYTES = 900_000
-const MAX_TOTAL_PHOTO_BYTES = 1_600_000
+const MAX_PHOTO_BYTES = 10_000_000
 const MAX_INTERESTS = 8
 
 const POPULAR_INTERESTS = [
@@ -33,10 +42,19 @@ const POPULAR_INTERESTS = [
   'Anime & Manga 🍙',
 ]
 
-type FieldErrors = Partial<Record<'name' | 'age' | 'city' | 'bio' | 'photos' | 'interests' | 'vibe' | 'lookingFor', string>>
+type FieldErrors = Partial<Record<'name' | 'age' | 'city' | 'bio' | 'photos' | 'interests' | 'vibe' | 'lookingFor' | 'profession' | 'education' | 'relationshipIntentions', string>>
 
-function bytesFromDataUrl(image: string) {
-  return Math.ceil(image.length * 0.75)
+function calculateAge(dob: string | null | undefined): number {
+  if (!dob) return 22
+  const birth = new Date(dob)
+  if (isNaN(birth.getTime())) return 22
+  const today = new Date()
+  let age = today.getFullYear() - birth.getFullYear()
+  const m = today.getMonth() - birth.getMonth()
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+    age--
+  }
+  return age >= 18 ? age : 18
 }
 
 function fileToDataUrl(file: File) {
@@ -77,8 +95,12 @@ function toDraft(profile: DemoUserProfile | null): DemoProfileDraft {
     bio: profile.bio,
     vibe: profile.vibe,
     lookingFor: profile.lookingFor,
+    profession: profile.profession || '',
+    education: profile.education || '',
+    relationshipIntentions: profile.relationshipIntentions || 'long_term',
     interests: [...profile.interests],
     photos: [...profile.photos],
+    photoIds: profile.photoIds ? [...profile.photoIds] : [],
   }
 }
 
@@ -101,6 +123,9 @@ export function ProfilePage() {
   const location = useLocation()
   const navigate = useNavigate()
   const { setGeneration } = useTheme()
+  const { user, updateUser } = useAuth()
+  const { profile: backendProfile, refreshProfile } = useDatingProfile()
+
   const [savedProfile, setSavedProfile] = useState<DemoUserProfile | null>(readDemoProfile)
   const [draft, setDraft] = useState<DemoProfileDraft>(() => toDraft(readDemoProfile()))
   const [errors, setErrors] = useState<FieldErrors>({})
@@ -109,6 +134,7 @@ export function ProfilePage() {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [isPublicPreview, setIsPublicPreview] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
 
   const isEditing = location.pathname.endsWith('/create') || location.pathname.endsWith('/edit')
   const isCreating = location.pathname.endsWith('/create') || !savedProfile
@@ -119,6 +145,60 @@ export function ProfilePage() {
     setToastMessage(msg)
     window.setTimeout(() => setToastMessage(null), 3000)
   }
+
+  // Populate profile from backend data if authenticated
+  useEffect(() => {
+    if (user || backendProfile) {
+      const fallback = readDemoProfile()
+      const age = calculateAge(backendProfile?.date_of_birth)
+      const name = user?.full_name || user?.username || fallback?.name || 'Raahi member'
+      const city = backendProfile?.city || fallback?.city || 'Mumbai'
+      const era = (backendProfile?.era || fallback?.era || 'genz') as GenerationId
+      const bio = backendProfile?.bio ?? user?.bio ?? fallback?.bio ?? ''
+      const vibe = backendProfile?.vibe_tag || fallback?.vibe || 'Low-key exclusive'
+      const lookingFor = (backendProfile?.match_era_preference || fallback?.lookingFor || 'any') as MatchEraId
+      const profession = backendProfile?.profession ?? fallback?.profession ?? ''
+      const education = backendProfile?.education ?? fallback?.education ?? ''
+      const relationshipIntentions = backendProfile?.relationship_intentions ?? fallback?.relationshipIntentions ?? 'long_term'
+      const interests = backendProfile?.interests && backendProfile.interests.length > 0
+        ? backendProfile.interests
+        : (fallback?.interests ?? ['Indie Music', 'Night Walks', 'Coffee'])
+
+      let photos: string[] = []
+      let photoIds: number[] = []
+      if (backendProfile?.photos && backendProfile.photos.length > 0) {
+        photos = backendProfile.photos.map(p => p.photo_url)
+        photoIds = backendProfile.photos.map(p => p.id)
+      } else if (fallback?.photos && fallback.photos.length > 0) {
+        photos = [...fallback.photos]
+        photoIds = fallback.photoIds ? [...fallback.photoIds] : []
+      }
+
+      const merged: DemoUserProfile = {
+        id: String(user?.id ?? fallback?.id ?? 'demo-user-1'),
+        name,
+        age,
+        city,
+        era,
+        bio,
+        vibe,
+        lookingFor,
+        profession,
+        education,
+        relationshipIntentions,
+        interests,
+        photos,
+        photoIds,
+        verificationStatus: (backendProfile?.verification_status || fallback?.verificationStatus || 'not_verified') as any,
+        createdAt: backendProfile?.created_at || fallback?.createdAt || new Date().toISOString(),
+        updatedAt: backendProfile?.updated_at || fallback?.updatedAt || new Date().toISOString(),
+      }
+
+      setSavedProfile(merged)
+      setDraft(toDraft(merged))
+      setGeneration(merged.era)
+    }
+  }, [user, backendProfile, setGeneration])
 
   useEffect(() => {
     if (savedProfile) setGeneration(savedProfile.era)
@@ -181,15 +261,38 @@ export function ProfilePage() {
       return
     }
     if (files.some(file => file.size > MAX_PHOTO_BYTES)) {
-      setErrors(previous => ({ ...previous, photos: 'Each image must be 900 KB or smaller.' }))
+      setErrors(previous => ({ ...previous, photos: 'Each image must be 10 MB or smaller.' }))
       return
     }
-    const currentBytes = draft.photos.reduce((sum, photo) => sum + bytesFromDataUrl(photo), 0)
-    const nextBytes = files.reduce((sum, file) => sum + file.size, currentBytes)
-    if (nextBytes > MAX_TOTAL_PHOTO_BYTES) {
-      setErrors(previous => ({ ...previous, photos: 'The gallery must stay under 1.6 MB for local storage.' }))
-      return
+
+    if (user) {
+      try {
+        const newPhotos: string[] = []
+        const newPhotoIds: number[] = []
+        for (const file of files) {
+          try {
+            const uploaded = await uploadProfilePhoto(file, () => {})
+            newPhotos.push(uploaded.photo_url)
+            newPhotoIds.push(uploaded.id)
+          } catch {
+            const dataUrl = await fileToDataUrl(file)
+            newPhotos.push(dataUrl)
+          }
+        }
+        setDraft(prev => ({
+          ...prev,
+          photos: [...prev.photos, ...newPhotos],
+          photoIds: [...(prev.photoIds || []), ...newPhotoIds],
+        }))
+        showToast('Photo uploaded successfully! 📸')
+        void refreshProfile().catch(() => undefined)
+        return
+      } catch {
+        setErrors(previous => ({ ...previous, photos: 'Could not upload photo. Try another file.' }))
+        return
+      }
     }
+
     try {
       const photos = await Promise.all(files.map(fileToDataUrl))
       updateField('photos', [...draft.photos, ...photos])
@@ -200,7 +303,15 @@ export function ProfilePage() {
   }
 
   function removePhoto(index: number) {
-    updateField('photos', draft.photos.filter((_, photoIndex) => photoIndex !== index))
+    const photoId = draft.photoIds?.[index]
+    if (photoId && user) {
+      void deleteProfilePhoto(photoId).catch(() => undefined)
+    }
+    setDraft(prev => ({
+      ...prev,
+      photos: prev.photos.filter((_, photoIndex) => photoIndex !== index),
+      photoIds: prev.photoIds ? prev.photoIds.filter((_, photoIndex) => photoIndex !== index) : [],
+    }))
     setPreviewIndex(current => (current === index ? null : current !== null && current > index ? current - 1 : current))
   }
 
@@ -209,7 +320,11 @@ export function ProfilePage() {
     if (nextIndex < 0 || nextIndex >= draft.photos.length) return
     const photos = [...draft.photos]
     ;[photos[index], photos[nextIndex]] = [photos[nextIndex], photos[index]]
-    updateField('photos', photos)
+    const photoIds = draft.photoIds ? [...draft.photoIds] : undefined
+    if (photoIds && photoIds[index] !== undefined && photoIds[nextIndex] !== undefined) {
+      ;[photoIds[index], photoIds[nextIndex]] = [photoIds[nextIndex], photoIds[index]]
+    }
+    setDraft(prev => ({ ...prev, photos, photoIds: photoIds ?? prev.photoIds }))
   }
 
   function setAsPrimary(index: number) {
@@ -217,11 +332,16 @@ export function ProfilePage() {
     const photos = [...draft.photos]
     const [selected] = photos.splice(index, 1)
     photos.unshift(selected)
-    updateField('photos', photos)
+    const photoIds = draft.photoIds ? [...draft.photoIds] : undefined
+    if (photoIds && photoIds[index] !== undefined) {
+      const [selectedId] = photoIds.splice(index, 1)
+      photoIds.unshift(selectedId)
+    }
+    setDraft(prev => ({ ...prev, photos, photoIds: photoIds ?? prev.photoIds }))
     showToast('Updated primary photo! 🌟')
   }
 
-  function save(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const validation = validateDraft(draft)
     setErrors(validation)
@@ -231,18 +351,67 @@ export function ProfilePage() {
       document.getElementById(`profile-${firstError}`)?.focus()
       return
     }
-    const profile = writeDemoProfile(
-      { ...draft, name: draft.name.trim(), city: draft.city.trim(), bio: draft.bio.trim() },
-      savedProfile
-    )
-    if (!profile) {
-      setFormMessage('Could not save profile. Try reducing the number or size of photos.')
-      return
+
+    setIsSaving(true)
+    try {
+      if (user) {
+        await updateUser({
+          full_name: draft.name.trim(),
+          bio: draft.bio.trim(),
+        })
+
+        const datingPayload = {
+          city: draft.city.trim(),
+          era: draft.era as DatingEra,
+          vibe_tag: draft.vibe,
+          match_era_preference: draft.lookingFor,
+          profession: draft.profession?.trim() || null,
+          education: draft.education?.trim() || null,
+          relationship_intentions: draft.relationshipIntentions || null,
+          interests: draft.interests,
+          full_name: draft.name.trim(),
+          bio: draft.bio.trim(),
+        }
+
+        if (backendProfile) {
+          await updateDatingProfile(datingPayload)
+        } else {
+          const today = new Date()
+          const birthYear = today.getFullYear() - (draft.age || 20)
+          const dob = `${birthYear}-01-01`
+          await createDatingProfile({
+            date_of_birth: dob,
+            gender: 'prefer_not_to_say',
+            city: draft.city.trim(),
+            era: draft.era as DatingEra,
+            vibe_tag: draft.vibe,
+            match_era_preference: draft.lookingFor,
+            target_gender_preference: 'any',
+            profession: draft.profession?.trim() || null,
+            education: draft.education?.trim() || null,
+            relationship_intentions: draft.relationshipIntentions || null,
+            interests: draft.interests,
+            full_name: draft.name.trim(),
+            bio: draft.bio.trim(),
+          })
+        }
+        await refreshProfile()
+      }
+
+      const updated = writeDemoProfile(
+        { ...draft, name: draft.name.trim(), city: draft.city.trim(), bio: draft.bio.trim() },
+        savedProfile
+      )
+      if (updated) {
+        setSavedProfile(updated)
+      }
+      showToast('Profile updated successfully! ✨')
+      navigate('/profile', { replace: true })
+    } catch (err) {
+      setFormMessage(err instanceof Error ? err.message : 'Could not save profile. Please try again.')
+    } finally {
+      setIsSaving(false)
     }
-    setSavedProfile(profile)
-    setDraft(toDraft(profile))
-    showToast('Profile updated successfully! ✨')
-    navigate('/profile', { replace: true })
   }
 
   function cancelEdit() {
@@ -266,7 +435,7 @@ export function ProfilePage() {
             <p className="profile-eyebrow">RAAHI IDENTITY</p>
             <h1>Profile</h1>
           </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="profile-heading-actions">
             <button
               type="button"
               className="profile-button quiet"
@@ -297,7 +466,7 @@ export function ProfilePage() {
                 onClick={() => setPreviewIndex(0)}
                 aria-label="Open profile photo gallery"
               >
-                <img src={viewProfile.photos[0]} alt={`${viewProfile.name}'s primary profile`} />
+                <img src={resolveMediaUrl(viewProfile.photos[0])} alt={`${viewProfile.name}'s primary profile`} />
                 <span className="profile-cover-count">
                   {viewProfile.photos.length} {viewProfile.photos.length === 1 ? 'photo' : 'photos'} · tap to view
                 </span>
@@ -328,6 +497,14 @@ export function ProfilePage() {
                 <span className="e e-float">📍</span> {viewProfile.city}
               </p>
 
+              {(viewProfile.profession || viewProfile.education) && (
+                <p className="profile-meta-sub" style={{ fontSize: '.88rem', color: 'rgba(235,230,250,0.85)', margin: '-10px 0 16px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {viewProfile.profession && <span>💼 {viewProfile.profession}</span>}
+                  {viewProfile.profession && viewProfile.education && <span>·</span>}
+                  {viewProfile.education && <span>🎓 {viewProfile.education}</span>}
+                </p>
+              )}
+
               <p className="profile-bio">{viewProfile.bio}</p>
 
               <div className="profile-tags">
@@ -345,6 +522,12 @@ export function ProfilePage() {
                 <strong>
                   {matchEraOptions.find(option => option.id === viewProfile.lookingFor)?.name ?? 'Open to any era'}
                 </strong>
+                {viewProfile.relationshipIntentions && (
+                  <>
+                    <span>Intentions</span>
+                    <strong>{viewProfile.relationshipIntentions}</strong>
+                  </>
+                )}
               </div>
             </div>
           </Card>
@@ -359,7 +542,7 @@ export function ProfilePage() {
                   {viewProfile.photos.length}/{MAX_PHOTOS}
                 </span>
               </div>
-              <div className="profile-photo-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginTop: 14 }}>
+              <div className="profile-photo-grid profile-gallery-grid">
                 {viewProfile.photos.map((photo, idx) => (
                   <div
                     key={idx}
@@ -368,7 +551,7 @@ export function ProfilePage() {
                     style={{ cursor: 'pointer', position: 'relative' }}
                     title="Tap to enlarge"
                   >
-                    <img src={photo} alt={`Gallery view ${idx + 1}`} style={{ width: '100%', height: 110, objectFit: 'cover' }} />
+                    <img className="profile-gallery-thumb" src={resolveMediaUrl(photo)} alt={`Gallery view ${idx + 1}`} />
                     {idx === 0 && (
                       <span
                         style={{
@@ -429,7 +612,7 @@ export function ProfilePage() {
         <Dialog open={previewIndex !== null} title="Profile photo gallery" onClose={() => setPreviewIndex(null)}>
           {previewIndex !== null && viewProfile.photos[previewIndex] && (
             <div className="profile-gallery-viewer">
-              <img src={viewProfile.photos[previewIndex]} alt={`${viewProfile.name}, photo ${previewIndex + 1}`} />
+              <img src={resolveMediaUrl(viewProfile.photos[previewIndex])} alt={`${viewProfile.name}, photo ${previewIndex + 1}`} />
               <div className="profile-gallery-controls">
                 <button
                   type="button"
@@ -499,7 +682,7 @@ export function ProfilePage() {
                     onClick={() => setPreviewIndex(index)}
                     aria-label={`Preview photo ${index + 1}`}
                   >
-                    <img src={photo} alt={`Profile photo ${index + 1}`} />
+                    <img src={resolveMediaUrl(photo)} alt={`Profile photo ${index + 1}`} />
                   </button>
                   <div className="profile-photo-actions">
                     {index === 0 ? (
@@ -633,6 +816,39 @@ export function ProfilePage() {
                 </select>
               </label>
 
+              <label className="profile-field" htmlFor="profile-profession">
+                <span>Profession / Occupation</span>
+                <input
+                  id="profile-profession"
+                  maxLength={100}
+                  value={draft.profession || ''}
+                  onChange={event => updateField('profession', event.currentTarget.value)}
+                  placeholder="Software Engineer, Designer, Student…"
+                />
+              </label>
+
+              <label className="profile-field" htmlFor="profile-education">
+                <span>Education / College</span>
+                <input
+                  id="profile-education"
+                  maxLength={100}
+                  value={draft.education || ''}
+                  onChange={event => updateField('education', event.currentTarget.value)}
+                  placeholder="IIT Bombay, Delhi University, High School…"
+                />
+              </label>
+
+              <label className="profile-field profile-field-full" htmlFor="profile-relationship-intentions">
+                <span>Relationship Intentions</span>
+                <input
+                  id="profile-relationship-intentions"
+                  maxLength={60}
+                  value={draft.relationshipIntentions || ''}
+                  onChange={event => updateField('relationshipIntentions', event.currentTarget.value)}
+                  placeholder="Long-term relationship, Casual dating, Figuring it out…"
+                />
+              </label>
+
               <label className="profile-field profile-field-full" htmlFor="profile-bio">
                 <span>
                   About you <small>{draft.bio.length}/300</small>
@@ -761,7 +977,7 @@ export function ProfilePage() {
           <div className="profile-completeness-preview">
             <div>
               <strong>{completeness}% complete</strong>
-              <span>Changes are saved locally to this device.</span>
+              <span>Changes are saved securely to your account.</span>
             </div>
             <div
               className="profile-progress-track"
@@ -776,13 +992,13 @@ export function ProfilePage() {
           </div>
 
           <div className="profile-submit-row">
-            <p>Demo profile data stays in this browser only.</p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button type="button" className="profile-button quiet" onClick={cancelEdit}>
+            <p>Your profile data and photos are saved securely to your Raahi account.</p>
+            <div className="profile-submit-actions">
+              <button type="button" className="profile-button quiet" onClick={cancelEdit} disabled={isSaving}>
                 Cancel
               </button>
-              <button type="submit" className="profile-button primary">
-                {isCreating ? 'Create profile' : 'Save changes'}
+              <button type="submit" className="profile-button primary" disabled={isSaving}>
+                {isSaving ? 'Saving…' : (isCreating ? 'Create profile' : 'Save changes')}
               </button>
             </div>
           </div>
@@ -793,7 +1009,7 @@ export function ProfilePage() {
         {previewIndex !== null && draft.photos[previewIndex] && (
           <img
             className="profile-editor-preview-image"
-            src={draft.photos[previewIndex]}
+            src={resolveMediaUrl(draft.photos[previewIndex])}
             alt={`Profile photo ${previewIndex + 1} preview`}
           />
         )}

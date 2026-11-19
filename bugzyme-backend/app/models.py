@@ -86,6 +86,20 @@ class User(Base):
     # Separate explicit consent for sending chat-derived content to Groq.
     ai_provider_processing_enabled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
+    phone_number = Column(
+        String(30),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+
+    auth_provider = Column(
+        String(30),
+        nullable=False,
+        default="local",
+        server_default=text("'local'"),
+    )
+
     chats_as_user1 = relationship(
         "Chat",
         foreign_keys="Chat.user1_id",
@@ -572,8 +586,20 @@ class UserProfile(Base):
     is_face_verified = Column(Boolean, nullable=False, server_default=text("false"))
     is_id_verified = Column(Boolean, nullable=False, server_default=text("false"))
     verification_status = Column(String(20), nullable=False, server_default="unverified") # 'unverified', 'pending', 'verified', 'rejected'
+    profession = Column(String(100), nullable=True)
+    education = Column(String(100), nullable=True)
+    relationship_intentions = Column(String(60), nullable=True)
+    interests = Column(JSON, nullable=True, default=list)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    photos = relationship(
+        "ProfilePhoto",
+        backref="profile",
+        cascade="all, delete-orphan",
+        order_by="ProfilePhoto.display_order",
+        lazy="selectin",
+    )
 
 
 class ProfilePhoto(Base):
@@ -685,3 +711,21 @@ class UserVerification(Base):
     status = Column(String(20), nullable=False) # 'passed', 'failed'
     details_json = Column(Text, nullable=True)
     reviewed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AuthVerificationCode(Base):
+    """Secure OTP verification codes and password reset tokens."""
+    __tablename__ = "auth_verification_codes"
+
+    __table_args__ = (
+        Index("ix_auth_codes_identifier_purpose", "identifier", "purpose"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    identifier = Column(String(254), nullable=False, index=True)  # Email or E.164 phone number
+    purpose = Column(String(50), nullable=False)  # 'phone_otp', 'password_reset_otp', 'password_reset_link'
+    code_hash = Column(String(128), nullable=False)  # SHA-256 hash of code/token
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

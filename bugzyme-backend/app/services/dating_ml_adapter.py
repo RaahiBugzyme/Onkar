@@ -302,6 +302,7 @@ class DatingMLAdapter:
             )
             compatibility = (item or {}).get("compatibility") or {}
             ranking = (item or {}).get("ranking") or {}
+            photo_urls = [p.photo_url for p in (profile.photos or [])] if hasattr(profile, "photos") and profile.photos else []
             feed_rows.append({
                 "user_id": user.id,
                 "username": user.username,
@@ -311,6 +312,12 @@ class DatingMLAdapter:
                 "era": profile.era,
                 "vibe_tag": profile.vibe_tag,
                 "bio": user.bio,
+                "profession": getattr(profile, "profession", None),
+                "education": getattr(profile, "education", None),
+                "relationship_intentions": getattr(profile, "relationship_intentions", None),
+                "interests": getattr(profile, "interests", None) or [],
+                "photos": photo_urls,
+                "photo_url": photo_urls[0] if photo_urls else None,
                 "compatibility_score": compatibility.get("score"),
                 "confidence_score": compatibility.get("confidence"),
                 "adjusted_score": compatibility.get("adjusted_score"),

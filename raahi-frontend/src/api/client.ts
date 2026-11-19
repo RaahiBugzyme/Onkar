@@ -11,7 +11,7 @@ type ClientImportMeta = ImportMeta & {
 const clientEnv = (import.meta as ClientImportMeta).env
 const configuredApiBaseUrl = clientEnv?.VITE_API_BASE_URL?.trim()
 const developmentApiBaseUrl = clientEnv?.DEV === true || clientEnv?.PROD !== true
-  ? 'http://localhost:8000'
+  ? 'http://127.0.0.1:8000'
   : ''
 const API_BASE_URL = (configuredApiBaseUrl || developmentApiBaseUrl).replace(/\/$/, '')
 
@@ -56,6 +56,21 @@ export function apiUrl(path: string) {
     throw new Error('VITE_API_BASE_URL must be configured for production.')
   }
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
+}
+
+export function resolveMediaUrl(path: string | null | undefined): string {
+  if (!path) return ''
+  const trimmed = path.trim()
+  if (!trimmed) return ''
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed
+  }
+  return apiUrl(trimmed)
 }
 
 export function webSocketUrl(path: string, token: string) {

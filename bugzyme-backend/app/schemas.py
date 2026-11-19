@@ -42,12 +42,16 @@ class UserPublic(_FromOrm):
     bio: str | None = None
     is_online: bool = False
     last_seen: datetime | None = None
+    photo_url: str | None = None
+    photos: list[str] = Field(default_factory=list)
 
     _fix_online = field_validator("is_online", mode="before")(_none_to_false)
 
 
 class UserResponse(UserPublic):
     email: str
+    phone_number: str | None = None
+    auth_provider: str = "local"
     ai_memory_enabled: bool = False
     ai_provider_processing_enabled: bool = False
     activity_status_enabled: bool = True
@@ -131,6 +135,65 @@ class PresencePreferenceResponse(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# ---------- extended auth: google, phone, password reset ----------
+PHONE_PATTERN = r"^\+[1-9]\d{6,14}$"
+
+
+class GoogleAuthUrlResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class GoogleCallbackRequest(BaseModel):
+    code: str | None = None
+    code_verifier: str | None = None
+    state: str | None = None
+    id_token: str | None = None
+
+
+class PhoneSendOtpRequest(BaseModel):
+    phone_number: str = Field(pattern=PHONE_PATTERN, description="E.164 phone number, e.g. +919876543210")
+
+
+class PhoneVerifyOtpRequest(BaseModel):
+    phone_number: str = Field(pattern=PHONE_PATTERN)
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    full_name: str | None = Field(default=None, max_length=80)
+    username: str | None = Field(default=None, min_length=3, max_length=30, pattern=USERNAME_PATTERN)
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+    is_new_user: bool = False
+
+
+class PasswordResetSendOtpRequest(BaseModel):
+    email: str = Field(max_length=254, pattern=EMAIL_PATTERN)
+
+
+class PasswordResetVerifyOtpRequest(BaseModel):
+    email: str = Field(max_length=254, pattern=EMAIL_PATTERN)
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class PasswordResetSendLinkRequest(BaseModel):
+    email: str = Field(max_length=254, pattern=EMAIL_PATTERN)
+
+
+class PasswordResetConfirmLinkRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=128)
+    email: str = Field(max_length=254, pattern=EMAIL_PATTERN)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class AuthMessageResponse(BaseModel):
+    message: str
+    success: bool = True
 
 
 # ---------- chats / messages ----------
@@ -269,6 +332,12 @@ class DatingProfileCreate(BaseModel):
     era: str = "genz"
     vibe_tag: str | None = Field(default=None, max_length=60)
     match_era_preference: str = "any"
+    full_name: str | None = Field(default=None, max_length=80)
+    bio: str | None = Field(default=None, max_length=500)
+    profession: str | None = Field(default=None, max_length=100)
+    education: str | None = Field(default=None, max_length=100)
+    relationship_intentions: str | None = Field(default=None, max_length=60)
+    interests: list[str] | None = Field(default=None)
 
     @field_validator("date_of_birth")
     @classmethod
@@ -303,6 +372,12 @@ class DatingProfileUpdate(BaseModel):
     era: str | None = Field(default=None)
     vibe_tag: str | None = Field(default=None, max_length=60)
     match_era_preference: str | None = Field(default=None)
+    full_name: str | None = Field(default=None, max_length=80)
+    bio: str | None = Field(default=None, max_length=500)
+    profession: str | None = Field(default=None, max_length=100)
+    education: str | None = Field(default=None, max_length=100)
+    relationship_intentions: str | None = Field(default=None, max_length=60)
+    interests: list[str] | None = Field(default=None)
 
     @model_validator(mode="before")
     @classmethod
@@ -342,6 +417,16 @@ class DatingProfileUpdate(BaseModel):
         return validate_era(v)
 
 
+class ProfilePhotoResponse(BaseModel):
+    """Response for profile photo operations."""
+    id: int
+    photo_url: str
+    is_primary: bool = False
+    display_order: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class DatingProfileResponse(_FromOrm):
     id: int
     user_id: int
@@ -363,6 +448,13 @@ class DatingProfileResponse(_FromOrm):
     is_face_verified: bool
     is_id_verified: bool
     verification_status: str
+    full_name: str | None = None
+    bio: str | None = None
+    profession: str | None = None
+    education: str | None = None
+    relationship_intentions: str | None = None
+    interests: list[str] = Field(default_factory=list)
+    photos: list[ProfilePhotoResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -405,6 +497,8 @@ class MatchedUserSummary(BaseModel):
     username: str
     full_name: str | None = None
     bio: str | None = None
+    photo_url: str | None = None
+    photos: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -444,6 +538,11 @@ class MatchDetailResponse(MatchDetail):
     city: str | None = None
     era: str | None = None
     vibe_tag: str | None = None
+    profession: str | None = None
+    education: str | None = None
+    relationship_intentions: str | None = None
+    interests: list[str] = Field(default_factory=list)
+    photos: list[str] = Field(default_factory=list)
 
 
 class SwipeResponse(_FromOrm):
@@ -476,6 +575,8 @@ class MatchListUser(BaseModel):
     username: str | None = None
     full_name: str | None = None
     bio: str | None = None
+    photo_url: str | None = None
+    photos: list[str] = Field(default_factory=list)
 
 
 class MatchListItem(BaseModel):
@@ -490,6 +591,11 @@ class MatchListItem(BaseModel):
     city: str | None = None
     era: str | None = None
     vibe_tag: str | None = None
+    profession: str | None = None
+    education: str | None = None
+    relationship_intentions: str | None = None
+    interests: list[str] = Field(default_factory=list)
+    photos: list[str] = Field(default_factory=list)
 
 
 class MatchListResponse(BaseModel):
@@ -567,14 +673,38 @@ class PublicProfileResponse(BaseModel):
     era: str | None = None
     vibe_tag: str | None = None
     bio: str | None = None
+    profession: str | None = None
+    education: str | None = None
+    relationship_intentions: str | None = None
+    interests: list[str] = Field(default_factory=list)
+    photos: list[str] = Field(default_factory=list)
     compatibility_score: int | None = None
 
 
-class ProfilePhotoResponse(BaseModel):
-    """Response for profile photo operations."""
-    id: int
-    photo_url: str
-    is_primary: bool = False
-    display_order: int = 0
+class SearchCandidateResponse(BaseModel):
+    user_id: int
+    username: str
+    full_name: str | None = None
+    age: int | None = None
+    city: str | None = None
+    era: str | None = None
+    vibe_tag: str | None = None
+    bio: str | None = None
+    profession: str | None = None
+    education: str | None = None
+    relationship_intentions: str | None = None
+    interests: list[str] = Field(default_factory=list)
+    photos: list[str] = Field(default_factory=list)
+    photo_url: str | None = None
+    is_verified: bool = True
+    shared_interests: list[str] = Field(default_factory=list)
+    shared_interests_count: int = 0
+    relevance_score: float = 0.0
 
-    model_config = ConfigDict(from_attributes=True)
+
+class SearchListResponse(BaseModel):
+    results: list[SearchCandidateResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

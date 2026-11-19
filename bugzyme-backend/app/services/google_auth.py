@@ -16,6 +16,8 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
+import time
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -26,7 +28,6 @@ from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 
 from app.core.config import settings
-from app.db.sqlite_repository import default_sqlite_repo
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,45 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 # Scopes strictly limited to user authentication and identity
 GOOGLE_SIGNIN_SCOPES = ["openid", "email", "profile"]
+
+# Thread-safe in-memory OAuth state cache with TTL (10 minutes)
+_STATE_LOCK = threading.Lock()
+_ACTIVE_STATES: Dict[str, Dict[str, Any]] = {}
+STATE_TTL_SECONDS = 600
+
+
+def _clean_expired_states() -> None:
+    now = time.time()
+    expired = [s for s, data in _ACTIVE_STATES.items() if data.get("expires_at", 0) < now]
+    for s in expired:
+        _ACTIVE_STATES.pop(s, None)
+
+
+def save_oauth_state(
+    state: str,
+    code_verifier: str,
+    redirect_uri: str,
+    user_id: Optional[str] = None,
+) -> None:
+    with _STATE_LOCK:
+        _clean_expired_states()
+        _ACTIVE_STATES[state] = {
+            "code_verifier": code_verifier,
+            "redirect_uri": redirect_uri,
+            "user_id": user_id,
+            "expires_at": time.time() + STATE_TTL_SECONDS,
+        }
+
+
+def verify_and_consume_oauth_state(state: str) -> Optional[Dict[str, Any]]:
+    with _STATE_LOCK:
+        _clean_expired_states()
+        data = _ACTIVE_STATES.pop(state, None)
+        if not data:
+            return None
+        if data.get("expires_at", 0) < time.time():
+            return None
+        return data
 
 
 def is_google_auth_configured() -> bool:
@@ -58,21 +98,20 @@ def generate_state() -> str:
 def get_google_auth_redirect_uri() -> str:
     """
     Determine the canonical redirect URI for Google Sign-In.
-    Prefers GOOGLE_AUTH_REDIRECT_URI if set, then GOOGLE_REDIRECT_URI if containing auth callback,
-    or falls back to localhost port 5257 callback route.
+    Prefers GOOGLE_AUTH_REDIRECT_URI if set, then GOOGLE_REDIRECT_URI,
+    or falls back to localhost frontend auth callback.
     """
-    if getattr(settings, "GOOGLE_AUTH_REDIRECT_URI", None):
+    if getattr(settings, "GOOGLE_AUTH_REDIRECT_URI", None) and settings.GOOGLE_AUTH_REDIRECT_URI.strip():
         return settings.GOOGLE_AUTH_REDIRECT_URI.strip()
-    if getattr(settings, "GOOGLE_REDIRECT_URI", None):
-        uri = settings.GOOGLE_REDIRECT_URI.strip()
-        if "auth/google/callback" in uri:
-            return uri
-    return "http://127.0.0.1:5257/api/v1/auth/google/callback"
+    if getattr(settings, "GOOGLE_REDIRECT_URI", None) and settings.GOOGLE_REDIRECT_URI.strip():
+        return settings.GOOGLE_REDIRECT_URI.strip()
+    frontend = get_frontend_base_url()
+    return f"{frontend}/auth/google/callback"
 
 
 def get_frontend_base_url() -> str:
     """Determine the approved frontend URL for redirects."""
-    if getattr(settings, "FRONTEND_URL", None):
+    if getattr(settings, "FRONTEND_URL", None) and settings.FRONTEND_URL.strip():
         return settings.FRONTEND_URL.strip().rstrip("/")
     return "http://localhost:5173"
 
@@ -80,29 +119,26 @@ def get_frontend_base_url() -> str:
 def build_google_auth_url(
     user_id: Optional[str] = None,
     redirect_uri: Optional[str] = None,
-    repo=None,
 ) -> Dict[str, str]:
     """
     Construct Google OAuth authorization URL with PKCE and state CSRF protection.
-    Saves state and code_verifier to SQLite for verification upon callback.
+    Saves state and code_verifier for verification upon callback.
     """
     if not is_google_auth_configured():
         raise ValueError(
             "Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend/.env"
         )
 
-    active_repo = repo or default_sqlite_repo
     state = generate_state()
     verifier, challenge = generate_pkce_pair()
     callback_uri = redirect_uri or get_google_auth_redirect_uri()
     stored_user_id = user_id or "anonymous_auth"
 
-    active_repo.save_oauth_state(
+    save_oauth_state(
         state=state,
-        user_id=stored_user_id,
-        provider="google_auth",
         code_verifier=verifier,
         redirect_uri=callback_uri,
+        user_id=stored_user_id,
     )
 
     params = {
@@ -121,6 +157,7 @@ def build_google_auth_url(
     return {
         "authorization_url": authorization_url,
         "state": state,
+        "code_verifier": verifier,
         "redirect_uri": callback_uri,
     }
 
@@ -184,7 +221,7 @@ def verify_google_id_token(
     """
     if mock_claims is not None:
         # Automated testing hook with verified claims
-        return _validate_claims(mock_claims, client_id or settings.GOOGLE_CLIENT_ID)
+        return _validate_claims(mock_claims, client_id or settings.GOOGLE_CLIENT_ID or "mock-client-id")
 
     expected_client_id = client_id or settings.GOOGLE_CLIENT_ID
     if not expected_client_id:
@@ -213,7 +250,7 @@ def _validate_claims(claims: Dict[str, Any], expected_audience: str) -> Dict[str
 
     # 2. Audience verification
     aud = claims.get("aud")
-    if aud != expected_audience:
+    if expected_audience and aud != expected_audience:
         raise ValueError(f"Audience mismatch: expected '{expected_audience}', got '{aud}'")
 
     # 3. Expiration verification
@@ -243,4 +280,3 @@ def _validate_claims(claims: Dict[str, Any], expected_audience: str) -> Dict[str
         "picture": claims.get("picture") or "",
         "email_verified": bool(email_verified),
     }
-

@@ -59,12 +59,30 @@
   transition: color .2s, background .2s, border-color .2s;
   white-space: nowrap;
 }
-.integration-nav-link:hover,
-.integration-nav-link.active { border-color: var(--cbr); background: var(--cbg); color: #fff; }
-.integration-nav-link-chat { border-color: color-mix(in srgb, var(--ep) 65%, var(--es)); background: linear-gradient(110deg, color-mix(in srgb, var(--ep) 26%, transparent), color-mix(in srgb, var(--es) 20%, transparent)); color: #fff; font-weight: 900; box-shadow: 0 0 22px color-mix(in srgb, var(--glow) 30%, transparent); }
-.integration-nav-link-chat:hover,
-.integration-nav-link-chat.active { border-color: var(--es); background: linear-gradient(110deg, color-mix(in srgb, var(--ep) 42%, transparent), color-mix(in srgb, var(--es) 32%, transparent)); box-shadow: 0 0 25px color-mix(in srgb, var(--glow) 44%, transparent); }
-.integration-chat-nav-icon { margin-right: 4px; color: var(--es); }
+.integration-nav-link:hover {
+  border-color: rgba(255, 255, 255, .18);
+  background: rgba(255, 255, 255, .05);
+  color: #fff;
+}
+.integration-nav-link.active {
+  border-color: color-mix(in srgb, var(--ep) 50%, var(--es) 40%);
+  background: linear-gradient(110deg, color-mix(in srgb, var(--ep) 18%, transparent), color-mix(in srgb, var(--es) 14%, transparent));
+  color: #fff;
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--glow) 22%, transparent);
+}
+.integration-nav-link-chat {
+  font-weight: 700;
+}
+.integration-nav-link-chat .integration-chat-nav-icon {
+  margin-right: 4px;
+  color: var(--ep);
+  transition: transform .2s ease, color .2s ease;
+}
+.integration-nav-link-chat:hover .integration-chat-nav-icon,
+.integration-nav-link-chat.active .integration-chat-nav-icon {
+  transform: scale(1.1);
+  color: var(--es);
+}
 .integration-theme-control { justify-self: end; display: flex; align-items: center; gap: 9px; color: var(--integration-muted); font-size: .78rem; }
 .integration-theme-control select {
   max-width: 140px;
@@ -107,8 +125,9 @@
 @media (max-width: 768px) {
   .integration-nav { display: none; }
   .app-mobile-nav-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; display: flex; justify-content: space-around; align-items: center; padding: 9px 12px 14px; background: rgba(14, 8, 26, 0.94); border-top: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
-  .mobile-nav-link { display: flex; flex-direction: column; align-items: center; gap: 3px; color: rgba(255, 255, 255, 0.55); font-size: 0.72rem; font-weight: 700; text-decoration: none; transition: color 0.15s ease; }
-  .mobile-nav-link.active { color: #fff; text-shadow: 0 0 10px rgba(255, 255, 255, 0.5); }
+  .mobile-nav-link { display: flex; flex-direction: column; align-items: center; gap: 3px; color: rgba(255, 255, 255, 0.55); font-size: 0.72rem; font-weight: 700; text-decoration: none; transition: color 0.15s ease, text-shadow 0.15s ease; }
+  .mobile-nav-link.active { color: #fff; text-shadow: 0 0 8px color-mix(in srgb, var(--glow) 30%, transparent); }
+  .mobile-nav-link.active .mobile-nav-icon { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--glow) 28%, transparent)); }
   .mobile-nav-icon { font-size: 1.15rem; }
   .integration-main { padding-bottom: 96px; }
 }

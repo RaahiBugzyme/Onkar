@@ -1,8 +1,16 @@
 .settings-screen {
   width: 100%;
-  max-width: 540px;
+  max-width: 560px;
   margin: 0 auto;
-  padding: 14px 16px clamp(110px, 16vh, 160px);
+  padding: 14px 16px clamp(120px, 18vh, 180px);
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .settings-screen {
+    padding-bottom: calc(110px + clamp(30px, 6vh, 60px));
+  }
 }
 
 .settings-back-link {

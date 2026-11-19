@@ -3,10 +3,12 @@
 import asyncio
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -34,7 +36,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
-from sqlalchemy import and_, or_, func, inspect, text
+from sqlalchemy import and_, or_, func, inspect, text, select, exists
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only, selectinload
 from starlette.concurrency import run_in_threadpool
@@ -52,6 +54,7 @@ from app.ai.provider_controls import (
 )
 from . import models, schemas, verification_storage
 from . import storage as attachment_storage
+from .services import google_auth, email_service, sms_service
 from .connection_manager import ConnectionManager
 from .database import Base, SessionLocal, engine, get_db
 from .services.dating_ml_adapter import DatingMLAdapter, MatchingConsentRequired, MatchingNotAllowed
@@ -273,6 +276,26 @@ def ensure_user_profile_columns(connection):
         raise
 
 
+def ensure_auth_schema(connection):
+    """Ensure authentication columns and auth_verification_codes table exist."""
+    try:
+        models.AuthVerificationCode.__table__.create(bind=connection, checkfirst=True)
+        if connection.dialect.name == "postgresql":
+            statements = {
+                "phone_number": "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30) NULL",
+                "auth_provider": "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(30) NOT NULL DEFAULT 'local'",
+            }
+            existing = {column["name"] for column in inspect(connection).get_columns("users")}
+            missing = [name for name in statements if name not in existing]
+            for name in missing:
+                connection.exec_driver_sql(statements[name])
+            if missing:
+                connection.commit()
+    except Exception:
+        connection.rollback()
+        logger.exception("Auth schema startup check failed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if PRODUCTION_MODE:
@@ -285,6 +308,7 @@ async def lifespan(_: FastAPI):
         with engine.connect() as connection:
             ensure_message_schema_columns(connection)
             ensure_user_profile_columns(connection)
+            ensure_auth_schema(connection)
 
         with SessionLocal() as db:
             db.query(models.User).update(
@@ -303,10 +327,11 @@ app = FastAPI(
 
 # Profile photos are intentionally public. Chat voice and file content is
 # served only through authenticated, membership-checked routes below.
-os.makedirs("uploads/profiles", exist_ok=True)
+UPLOAD_PROFILES_DIR = (Path(__file__).resolve().parent.parent / "uploads" / "profiles").resolve()
+os.makedirs(UPLOAD_PROFILES_DIR, exist_ok=True)
 app.mount(
     "/uploads/profiles",
-    StaticFiles(directory="uploads/profiles"),
+    StaticFiles(directory=str(UPLOAD_PROFILES_DIR)),
     name="profile-uploads"
 )
 
@@ -2119,6 +2144,442 @@ def login_user(
 
 
 # ============================================================
+# EXTENDED AUTH VERIFICATION & RECOVERY HELPERS
+# ============================================================
+
+def _hash_verification_code(code: str) -> str:
+    return hashlib.sha256(code.strip().encode("utf-8")).hexdigest()
+
+
+def _ensure_auth_verification_table(db: Session) -> None:
+    """Ensure the auth_verification_codes table exists."""
+    try:
+        bind = db.get_bind()
+        models.AuthVerificationCode.__table__.create(bind=bind, checkfirst=True)
+    except Exception as exc:
+        logger.warning("Could not auto-ensure auth_verification_codes table: %s", exc)
+
+
+def _issue_verification_code(
+    db: Session,
+    identifier: str,
+    purpose: str,
+    raw_code: str,
+    ttl_minutes: int = 10,
+) -> models.AuthVerificationCode:
+    clean_id = identifier.strip().lower()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    window_start = now - timedelta(minutes=10)
+
+    try:
+        recent_count = db.query(models.AuthVerificationCode).filter(
+            models.AuthVerificationCode.identifier == clean_id,
+            models.AuthVerificationCode.purpose == purpose,
+            models.AuthVerificationCode.created_at >= window_start,
+        ).count()
+    except Exception as db_exc:
+        db.rollback()
+        _ensure_auth_verification_table(db)
+        try:
+            recent_count = db.query(models.AuthVerificationCode).filter(
+                models.AuthVerificationCode.identifier == clean_id,
+                models.AuthVerificationCode.purpose == purpose,
+                models.AuthVerificationCode.created_at >= window_start,
+            ).count()
+        except Exception as retry_exc:
+            db.rollback()
+            logger.error("Failed querying auth verification codes: %s", retry_exc)
+            raise HTTPException(
+                status_code=500,
+                detail="Database error while processing verification code request.",
+            ) from retry_exc
+
+    if recent_count >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many verification requests. Please wait a few minutes before trying again.",
+        )
+
+    try:
+        # Invalidate previous unused codes for this identifier and purpose
+        db.query(models.AuthVerificationCode).filter(
+            models.AuthVerificationCode.identifier == clean_id,
+            models.AuthVerificationCode.purpose == purpose,
+            models.AuthVerificationCode.used == False,
+        ).update({"used": True}, synchronize_session=False)
+
+        expires_at = now + timedelta(minutes=ttl_minutes)
+        record = models.AuthVerificationCode(
+            identifier=clean_id,
+            purpose=purpose,
+            code_hash=_hash_verification_code(raw_code),
+            expires_at=expires_at,
+            used=False,
+            attempts=0,
+            created_at=now,
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed saving verification code: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while saving verification code.",
+        ) from exc
+
+
+def _verify_verification_code(
+    db: Session,
+    identifier: str,
+    purpose: str,
+    raw_code: str,
+) -> bool:
+    clean_id = identifier.strip().lower()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    try:
+        record = db.query(models.AuthVerificationCode).filter(
+            models.AuthVerificationCode.identifier == clean_id,
+            models.AuthVerificationCode.purpose == purpose,
+            models.AuthVerificationCode.used == False,
+            models.AuthVerificationCode.expires_at >= now,
+        ).order_by(models.AuthVerificationCode.created_at.desc()).first()
+    except Exception as db_exc:
+        db.rollback()
+        _ensure_auth_verification_table(db)
+        try:
+            record = db.query(models.AuthVerificationCode).filter(
+                models.AuthVerificationCode.identifier == clean_id,
+                models.AuthVerificationCode.purpose == purpose,
+                models.AuthVerificationCode.used == False,
+                models.AuthVerificationCode.expires_at >= now,
+            ).order_by(models.AuthVerificationCode.created_at.desc()).first()
+        except Exception:
+            db.rollback()
+            return False
+
+    if not record:
+        return False
+
+    try:
+        if record.attempts >= 5:
+            record.used = True
+            db.commit()
+            return False
+
+        incoming_hash = _hash_verification_code(raw_code)
+        if not hmac.compare_digest(incoming_hash, record.code_hash):
+            record.attempts += 1
+            if record.attempts >= 5:
+                record.used = True
+            db.commit()
+            return False
+
+        record.used = True
+        db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed updating verification code status: %s", exc)
+        return False
+
+
+def _generate_unique_username(base_name: str, fallback_seed: str, db: Session) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "", (base_name or fallback_seed.split("@")[0])).strip().lower()
+    if len(cleaned) < 3:
+        cleaned = f"user_{secrets.token_hex(3)}"
+    elif len(cleaned) > 22:
+        cleaned = cleaned[:22]
+
+    candidate = cleaned
+    counter = 1
+    while db.query(models.User).filter(func.lower(models.User.username) == candidate.lower()).first():
+        suffix = str(counter)
+        candidate = f"{cleaned[:30-len(suffix)]}{suffix}"
+        counter += 1
+    return candidate
+
+
+# ============================================================
+# GOOGLE AUTHENTICATION ENDPOINTS
+# ============================================================
+
+@app.get("/api/v1/auth/google/url", response_model=schemas.GoogleAuthUrlResponse)
+def get_google_auth_url(redirect_uri: str | None = None):
+    """Retrieve Google OAuth authorization URL with state and PKCE."""
+    if not google_auth.is_google_auth_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Sign-In is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in backend environment."
+        )
+    data = google_auth.build_google_auth_url(redirect_uri=redirect_uri)
+    return {"authorization_url": data["authorization_url"], "state": data["state"]}
+
+
+@app.post("/api/v1/auth/google/callback", response_model=schemas.AuthTokenResponse)
+def google_auth_callback(payload: schemas.GoogleCallbackRequest, db: Session = Depends(get_db)):
+    """Exchange authorization code or verify Google ID token for login or registration."""
+    claims: dict[str, Any] = {}
+    if payload.id_token:
+        try:
+            claims = google_auth.verify_google_id_token(payload.id_token)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif payload.code and payload.state:
+        state_data = google_auth.verify_and_consume_oauth_state(payload.state)
+        if not state_data:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state parameter")
+        code_verifier = payload.code_verifier or state_data.get("code_verifier", "")
+        redirect_uri = state_data.get("redirect_uri") or google_auth.get_google_auth_redirect_uri()
+        try:
+            tokens = google_auth.exchange_code_for_google_tokens(payload.code, code_verifier, redirect_uri)
+            id_token_jwt = tokens.get("id_token")
+            if not id_token_jwt:
+                raise ValueError("Google token response did not include an ID token")
+            claims = google_auth.verify_google_id_token(id_token_jwt)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Google authentication failed: {exc}")
+    else:
+        raise HTTPException(status_code=400, detail="Either id_token or code and state must be provided")
+
+    email = claims.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Google account did not return a valid email address")
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email.lower()).first()
+    is_new = False
+    if not user:
+        is_new = True
+        username = _generate_unique_username(claims.get("name", ""), email, db)
+        user = models.User(
+            username=username,
+            email=email.lower(),
+            full_name=claims.get("name"),
+            hashed_password=password_hash.hash(secrets.token_urlsafe(32)),
+            auth_provider="google",
+            is_online=False,
+        )
+        db.add(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            db.rollback()
+            user = db.query(models.User).filter(func.lower(models.User.email) == email.lower()).first()
+            if not user:
+                raise HTTPException(status_code=409, detail="Could not create user account")
+
+    token = create_token(user.id)
+    return schemas.AuthTokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user,
+        is_new_user=is_new,
+    )
+
+
+# ============================================================
+# PHONE REGISTRATION & SMS OTP ENDPOINTS
+# ============================================================
+
+@app.post("/api/v1/auth/phone/send-otp", response_model=schemas.AuthMessageResponse)
+def send_phone_otp(payload: schemas.PhoneSendOtpRequest, db: Session = Depends(get_db)):
+    """Send a 6-digit SMS OTP to a phone number for registration or login."""
+    phone = payload.phone_number.strip()
+    otp_code = f"{secrets.randbelow(900000) + 100000:06d}"
+    _issue_verification_code(db, phone, "phone_otp", otp_code, ttl_minutes=5)
+
+    try:
+        sms_service.send_sms_otp(phone, otp_code)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"SMS delivery error: {exc}")
+
+    return schemas.AuthMessageResponse(message="Verification code sent via SMS", success=True)
+
+
+@app.post("/api/v1/auth/phone/verify-otp", response_model=schemas.AuthTokenResponse)
+def verify_phone_otp(payload: schemas.PhoneVerifyOtpRequest, db: Session = Depends(get_db)):
+    """Verify 6-digit SMS OTP and log in or register the user."""
+    phone = payload.phone_number.strip()
+    if not _verify_verification_code(db, phone, "phone_otp", payload.otp):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    user = db.query(models.User).filter(models.User.phone_number == phone).first()
+    is_new = False
+    if not user:
+        is_new = True
+        seed = payload.username or payload.full_name or "user"
+        username = _generate_unique_username(seed, phone, db)
+        clean_digits = re.sub(r"[^0-9]", "", phone)
+        placeholder_email = f"phone_{clean_digits}@raahi.internal"
+        user = models.User(
+            username=username,
+            email=placeholder_email,
+            phone_number=phone,
+            full_name=payload.full_name.strip() if payload.full_name else None,
+            hashed_password=password_hash.hash(secrets.token_urlsafe(32)),
+            auth_provider="phone",
+            is_online=False,
+        )
+        db.add(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            db.rollback()
+            user = db.query(models.User).filter(models.User.phone_number == phone).first()
+            if not user:
+                raise HTTPException(status_code=409, detail="Could not create user account for phone number")
+
+    token = create_token(user.id)
+    return schemas.AuthTokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user,
+        is_new_user=is_new,
+    )
+
+
+# ============================================================
+# FORGOT PASSWORD (EMAIL OTP & RESET LINK) ENDPOINTS
+# ============================================================
+
+@app.post("/api/v1/auth/password-reset/send-otp", response_model=schemas.AuthMessageResponse)
+def send_password_reset_otp(payload: schemas.PasswordResetSendOtpRequest, db: Session = Depends(get_db)):
+    """Send a 6-digit email OTP for password recovery."""
+    email = payload.email.strip().lower()
+
+    if not email_service.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email service is temporarily unavailable. Please contact support or try again later.",
+        )
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if user:
+        otp_code = f"{secrets.randbelow(900000) + 100000:06d}"
+        code_record = _issue_verification_code(db, email, "password_reset_otp", otp_code, ttl_minutes=10)
+        try:
+            email_service.send_password_reset_otp_email(user.email, otp_code)
+        except Exception as exc:
+            try:
+                db.delete(code_record)
+                db.commit()
+            except Exception:
+                db.rollback()
+            logger.error("Failed to deliver password reset OTP email: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not send verification email. Please check your email configuration or try again.",
+            )
+
+    # Always return success message to prevent account enumeration
+    return schemas.AuthMessageResponse(
+        message="If this email is registered, a 6-digit verification code has been sent.",
+        success=True,
+    )
+
+
+@app.post("/api/v1/auth/password-reset/verify-otp", response_model=schemas.AuthMessageResponse)
+def verify_password_reset_otp(payload: schemas.PasswordResetVerifyOtpRequest, db: Session = Depends(get_db)):
+    """Verify 6-digit email OTP and update account password."""
+    email = payload.email.strip().lower()
+    if len(payload.new_password) < 8 or len(payload.new_password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be between 8 and 128 characters.")
+
+    if not _verify_verification_code(db, email, "password_reset_otp", payload.otp):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Account not found")
+
+    try:
+        user.hashed_password = password_hash.hash(payload.new_password)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed updating password after OTP verification: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to save new password. Please try again.")
+
+    return schemas.AuthMessageResponse(
+        message="Password updated successfully. You may now log in.",
+        success=True,
+    )
+
+
+@app.post("/api/v1/auth/password-reset/send-link", response_model=schemas.AuthMessageResponse)
+def send_password_reset_link(payload: schemas.PasswordResetSendLinkRequest, db: Session = Depends(get_db)):
+    """Send a secure password-reset link to the user's email."""
+    email = payload.email.strip().lower()
+
+    if not email_service.is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email service is temporarily unavailable. Please contact support or try again later.",
+        )
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        code_record = _issue_verification_code(db, email, "password_reset_link", raw_token, ttl_minutes=60)
+        frontend_base = google_auth.get_frontend_base_url()
+        reset_url = f"{frontend_base}/reset-password?token={raw_token}&email={quote(email)}"
+        try:
+            email_service.send_password_reset_link_email(user.email, reset_url)
+        except Exception as exc:
+            try:
+                db.delete(code_record)
+                db.commit()
+            except Exception:
+                db.rollback()
+            logger.error("Failed to deliver password reset link email: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not send password reset link. Please check your email configuration or try again.",
+            )
+
+    # Always return success message to prevent account enumeration
+    return schemas.AuthMessageResponse(
+        message="If this email is registered, a secure password reset link has been sent.",
+        success=True,
+    )
+
+
+@app.post("/api/v1/auth/password-reset/confirm-link", response_model=schemas.AuthMessageResponse)
+def confirm_password_reset_link(payload: schemas.PasswordResetConfirmLinkRequest, db: Session = Depends(get_db)):
+    """Validate password reset link token and update account password."""
+    email = payload.email.strip().lower()
+    if len(payload.new_password) < 8 or len(payload.new_password) > 128:
+        raise HTTPException(status_code=400, detail="Password must be between 8 and 128 characters.")
+
+    if not _verify_verification_code(db, email, "password_reset_link", payload.token):
+        raise HTTPException(status_code=400, detail="Invalid or expired password reset link")
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Account not found")
+
+    try:
+        user.hashed_password = password_hash.hash(payload.new_password)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed updating password after link confirmation: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to save new password. Please try again.")
+
+    return schemas.AuthMessageResponse(
+        message="Password updated successfully. You may now log in.",
+        success=True,
+    )
+
+
+# ============================================================
 # CURRENT USER
 # ============================================================
 
@@ -2467,6 +2928,13 @@ def list_chats(
         .filter(models.User.id.in_(partner_ids))
         .all()
     }
+    partner_profiles = {
+        p.user_id: p
+        for p in db.query(models.UserProfile)
+        .filter(models.UserProfile.user_id.in_(partner_ids))
+        .options(selectinload(models.UserProfile.photos))
+        .all()
+    }
 
     result = []
 
@@ -2478,6 +2946,10 @@ def list_chats(
         if not partner:
             continue
 
+        partner_prof = partner_profiles.get(partner.id)
+        partner_photos = [p.photo_url for p in (partner_prof.photos or [])] if partner_prof else []
+        partner_photo = partner_photos[0] if partner_photos else None
+
         last_message = latest_messages.get(chat.id)
 
         result.append(
@@ -2488,6 +2960,8 @@ def list_chats(
                     username=partner.username,
                     full_name=partner.full_name,
                     bio=partner.bio,
+                    photo_url=partner_photo,
+                    photos=partner_photos,
                     is_online=(
                         partner.id in visible_partners
                         and manager.is_online(partner.id)
@@ -3705,6 +4179,49 @@ def _enforce_swipe_rate_limit(db: Session, user_id: int) -> None:
             ),
         )
 
+def _serialize_dating_profile(profile: models.UserProfile, user: models.User) -> schemas.DatingProfileResponse:
+    photo_items = [
+        schemas.ProfilePhotoResponse(
+            id=p.id,
+            photo_url=p.photo_url,
+            is_primary=bool(p.is_primary),
+            display_order=p.display_order,
+        )
+        for p in (profile.photos or [])
+    ]
+    return schemas.DatingProfileResponse(
+        id=profile.id,
+        user_id=profile.user_id,
+        date_of_birth=profile.date_of_birth,
+        gender=profile.gender,
+        sexual_orientation=profile.sexual_orientation,
+        sexual_orientation_consent=profile.sexual_orientation_consent,
+        sexual_orientation_consent_version=profile.sexual_orientation_consent_version,
+        sexual_orientation_consent_at=profile.sexual_orientation_consent_at,
+        sexual_orientation_consent_revoked_at=profile.sexual_orientation_consent_revoked_at,
+        behavioral_personalization_enabled=profile.behavioral_personalization_enabled,
+        behavioral_personalization_consent_version=profile.behavioral_personalization_consent_version,
+        behavioral_personalization_consent_at=profile.behavioral_personalization_consent_at,
+        behavioral_personalization_consent_revoked_at=profile.behavioral_personalization_consent_revoked_at,
+        city=profile.city,
+        era=profile.era,
+        vibe_tag=profile.vibe_tag,
+        match_era_preference=profile.match_era_preference,
+        is_face_verified=profile.is_face_verified,
+        is_id_verified=profile.is_id_verified,
+        verification_status=profile.verification_status,
+        full_name=user.full_name,
+        bio=user.bio,
+        profession=profile.profession,
+        education=profile.education,
+        relationship_intentions=profile.relationship_intentions,
+        interests=profile.interests or [],
+        photos=photo_items,
+        created_at=profile.created_at,
+        updated_at=profile.updated_at,
+    )
+
+
 @app.post(
     "/api/v1/profile",
     response_model=schemas.DatingProfileResponse,
@@ -3742,16 +4259,26 @@ def create_dating_profile(
         era=profile.era,
         vibe_tag=profile.vibe_tag,
         match_era_preference=profile.match_era_preference,
+        profession=profile.profession,
+        education=profile.education,
+        relationship_intentions=profile.relationship_intentions,
+        interests=profile.interests or [],
         is_face_verified=False,
         is_id_verified=False,
         verification_status="unverified"
     )
 
+    if profile.full_name is not None:
+        current_user.full_name = profile.full_name.strip()
+    if profile.bio is not None:
+        current_user.bio = profile.bio.strip()
+
     db.add(db_profile)
     db.commit()
     db.refresh(db_profile)
+    db.refresh(current_user)
 
-    return db_profile
+    return _serialize_dating_profile(db_profile, current_user)
 
 
 @app.get(
@@ -3765,12 +4292,12 @@ def get_dating_profile(
     """Get the current user's dating profile."""
     profile = db.query(models.UserProfile).filter(
         models.UserProfile.user_id == current_user.id
-    ).first()
+    ).options(selectinload(models.UserProfile.photos)).first()
 
     if not profile:
         raise HTTPException(404, "Dating profile not found. Create one first.")
 
-    return profile
+    return _serialize_dating_profile(profile, current_user)
 
 
 @app.put(
@@ -3785,12 +4312,17 @@ def update_dating_profile(
     """Update the current user's dating profile."""
     profile = db.query(models.UserProfile).filter(
         models.UserProfile.user_id == current_user.id
-    ).first()
+    ).options(selectinload(models.UserProfile.photos)).first()
 
     if not profile:
         raise HTTPException(404, "Dating profile not found. Create one first with POST /api/v1/profile")
 
     values = updates.model_dump(exclude_unset=True)
+
+    if "full_name" in values and values["full_name"] is not None:
+        current_user.full_name = values.pop("full_name").strip()
+    if "bio" in values and values["bio"] is not None:
+        current_user.bio = values.pop("bio").strip()
 
     if "date_of_birth" in values and values["date_of_birth"] is not None:
         try:
@@ -3805,8 +4337,9 @@ def update_dating_profile(
 
     db.commit()
     db.refresh(profile)
+    db.refresh(current_user)
 
-    return profile
+    return _serialize_dating_profile(profile, current_user)
 
 
 @app.get(
@@ -3947,6 +4480,8 @@ def get_public_profile(
     if not user:
         raise HTTPException(404, "User profile not found")
 
+    photos = [p.photo_url for p in (profile.photos or [])]
+
     return schemas.PublicProfileResponse(
         user_id=profile.user_id,
         username=user.username,
@@ -3956,6 +4491,11 @@ def get_public_profile(
         era=profile.era,
         vibe_tag=profile.vibe_tag,
         bio=user.bio,
+        profession=profile.profession,
+        education=profile.education,
+        relationship_intentions=profile.relationship_intentions,
+        interests=profile.interests or [],
+        photos=photos,
     )
 
 
@@ -4024,15 +4564,9 @@ async def upload_profile_photo(
 
     # Generate storage key
     storage_key = f"profile_{uuid_module.uuid4().hex[:16]}"
-    photo_path = Path(f"uploads/profiles/{storage_key}.webp")
-
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(photo_path), exist_ok=True)
-
-    # Write file (convert to webp if needed, or store as-is for simplicity)
-    # For now, save as original format
     ext = Path(file.filename or "image").suffix.lower() or ".png"
-    actual_path = str(photo_path).replace('.webp', ext) if ext != '.webp' else str(photo_path)
+    photo_filename = f"{storage_key}{ext}"
+    actual_path = UPLOAD_PROFILES_DIR / photo_filename
 
     with open(actual_path, 'wb') as f:
         f.write(content)
@@ -4067,7 +4601,7 @@ async def upload_profile_photo(
 
 @app.get(
     "/api/v1/profile/me/photos",
-    response_model=list[schemas.DatingProfileResponse]
+    response_model=list[schemas.ProfilePhotoResponse]
 )
 def list_profile_photos(
     current_user: models.User = Depends(get_current_user),
@@ -4116,9 +4650,20 @@ def delete_profile_photo(
     if not photo:
         raise HTTPException(404, "Photo not found or access denied")
 
-    # Delete file
-    if os.path.exists(photo.photo_url):
-        os.remove(photo.photo_url)
+    # Delete file safely if exists on disk
+    file_name = os.path.basename(photo.photo_url)
+    disk_path = UPLOAD_PROFILES_DIR / file_name
+    if disk_path.exists():
+        with contextlib.suppress(OSError):
+            disk_path.unlink()
+    else:
+        file_path = photo.photo_url.lstrip("/")
+        if os.path.exists(file_path):
+            with contextlib.suppress(OSError):
+                os.remove(file_path)
+        elif os.path.exists(photo.photo_url):
+            with contextlib.suppress(OSError):
+                os.remove(photo.photo_url)
 
     db.delete(photo)
     db.commit()
@@ -5167,7 +5712,9 @@ def list_matches(
         other_id = match.user2_id if match.user1_id == current_user.id else match.user1_id
         if _has_block_between(db, current_user.id, other_id):
             continue
-        other_profile = db.query(models.UserProfile).filter(
+        other_profile = db.query(models.UserProfile).options(
+            selectinload(models.UserProfile.photos)
+        ).filter(
             models.UserProfile.user_id == other_id
         ).first()
         if _is_discoverable_profile(other_profile):
@@ -5179,6 +5726,7 @@ def list_matches(
     results = []
     for match, other_id, other_profile in page:
         other_user = db.get(models.User, other_id)
+        other_photos = [p.photo_url for p in (other_profile.photos or [])] if other_profile and other_profile.photos else []
         results.append({
             "id": match.id,
             "chat_id": match.chat_id,
@@ -5187,6 +5735,8 @@ def list_matches(
                 "username": other_user.username if other_user else None,
                 "full_name": other_user.full_name if other_user else None,
                 "bio": other_user.bio if other_user else None,
+                "photo_url": other_photos[0] if other_photos else None,
+                "photos": other_photos,
             },
             "compatibility_score": match.compatibility_score,
             "compatibility_score_status": "legacy_placeholder",
@@ -5196,6 +5746,11 @@ def list_matches(
             "city": other_profile.city if other_profile else None,
             "era": other_profile.era if other_profile else None,
             "vibe_tag": other_profile.vibe_tag if other_profile else None,
+            "profession": getattr(other_profile, "profession", None) if other_profile else None,
+            "education": getattr(other_profile, "education", None) if other_profile else None,
+            "relationship_intentions": getattr(other_profile, "relationship_intentions", None) if other_profile else None,
+            "interests": getattr(other_profile, "interests", None) or [] if other_profile else [],
+            "photos": other_photos,
         })
 
     return {
@@ -5234,13 +5789,16 @@ def get_match(
     if _has_block_between(db, current_user.id, other_id):
         raise HTTPException(404, "Match not found")
     other_user = db.get(models.User, other_id)
-    other_profile = db.query(models.UserProfile).filter(
+    other_profile = db.query(models.UserProfile).options(
+        selectinload(models.UserProfile.photos)
+    ).filter(
         models.UserProfile.user_id == other_id
     ).first()
 
     if not _is_discoverable_profile(other_profile):
         raise HTTPException(404, "Match not found")
 
+    other_photos = [p.photo_url for p in (other_profile.photos or [])] if other_profile and other_profile.photos else []
     return {
         "id": match.id,
         "chat_id": match.chat_id,
@@ -5249,6 +5807,8 @@ def get_match(
             "username": other_user.username if other_user else None,
             "full_name": other_user.full_name if other_user else None,
             "bio": other_user.bio if other_user else None,
+            "photo_url": other_photos[0] if other_photos else None,
+            "photos": other_photos,
         },
         "compatibility_score": match.compatibility_score,
         "compatibility_score_status": "legacy_placeholder",
@@ -5258,6 +5818,11 @@ def get_match(
         "city": other_profile.city if other_profile else None,
         "era": other_profile.era if other_profile else None,
         "vibe_tag": other_profile.vibe_tag if other_profile else None,
+        "profession": getattr(other_profile, "profession", None) if other_profile else None,
+        "education": getattr(other_profile, "education", None) if other_profile else None,
+        "relationship_intentions": getattr(other_profile, "relationship_intentions", None) if other_profile else None,
+        "interests": getattr(other_profile, "interests", None) or [] if other_profile else [],
+        "photos": other_photos,
     }
 
 
@@ -5323,6 +5888,7 @@ def _feed_eligibility_filters(profile: models.UserProfile, today: date) -> list[
         models.UserProfile.is_face_verified.is_(True),
         models.UserProfile.is_id_verified.is_(True),
         models.UserProfile.verification_status == "verified",
+        exists(select(models.ProfilePhoto.id).where(models.ProfilePhoto.profile_id == models.UserProfile.id)),
     ]
 
     own_gender_preference = profile.target_gender_preference or "any"
@@ -5409,7 +5975,10 @@ def get_feed(
             models.UserProfile.is_face_verified, models.UserProfile.is_id_verified,
             models.UserProfile.verification_status,
             models.UserProfile.behavioral_personalization_enabled,
+            models.UserProfile.profession, models.UserProfile.education,
+            models.UserProfile.relationship_intentions, models.UserProfile.interests,
         ),
+        selectinload(models.UserProfile.photos),
     )
     eligible_profiles = required_profiles.all()
 
@@ -5427,3 +5996,159 @@ def get_feed(
     except Exception as exc:
         logger.exception("Dating ML feed ranking failed")
         raise HTTPException(status_code=503, detail="Matching service is temporarily unavailable") from exc
+
+
+@app.get(
+    "/api/v1/search",
+    response_model=schemas.SearchListResponse,
+)
+def search_profiles(
+    q: str | None = Query(default=None, description="Search across name, username, bio, profession, city"),
+    interests: list[str] = Query(default=[], description="Filter by one or more interests"),
+    city: str | None = Query(default=None),
+    profession: str | None = Query(default=None),
+    relationship_intentions: str | None = Query(default=None),
+    min_age: int | None = Query(default=None, ge=schemas.AGE_MINIMUM, le=120),
+    max_age: int | None = Query(default=None, ge=schemas.AGE_MINIMUM, le=120),
+    era: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Search discoverable profiles with multi-attribute filtering and shared-interest relevance ranking."""
+    requester_profile = _require_verified_profile(db, current_user.id)
+    today = date.today()
+
+    eligibility_filters = _feed_eligibility_filters(requester_profile, today)
+    no_block = ~_feed_block_exists(db, current_user.id)
+
+    query = db.query(models.User, models.UserProfile).join(
+        models.UserProfile,
+        models.User.id == models.UserProfile.user_id,
+    ).filter(
+        models.User.id != current_user.id,
+        *eligibility_filters,
+        no_block,
+    )
+
+    if city and city.strip():
+        query = query.filter(func.lower(models.UserProfile.city).contains(city.strip().lower()))
+
+    if profession and profession.strip():
+        query = query.filter(func.lower(models.UserProfile.profession).contains(profession.strip().lower()))
+
+    if relationship_intentions and relationship_intentions.strip():
+        query = query.filter(models.UserProfile.relationship_intentions == relationship_intentions.strip())
+
+    if era and era.strip():
+        query = query.filter(models.UserProfile.era == era.strip())
+
+    if min_age is not None:
+        try:
+            max_birthdate = date(today.year - min_age, today.month, today.day)
+        except ValueError:
+            max_birthdate = date(today.year - min_age, 2, 28)
+        query = query.filter(models.UserProfile.date_of_birth <= max_birthdate)
+
+    if max_age is not None:
+        try:
+            min_birthdate = date(today.year - max_age - 1, today.month, today.day)
+        except ValueError:
+            min_birthdate = date(today.year - max_age - 1, 2, 28)
+        query = query.filter(models.UserProfile.date_of_birth > min_birthdate)
+
+    query = query.options(
+        load_only(models.User.id, models.User.username, models.User.full_name, models.User.bio),
+        load_only(
+            models.UserProfile.user_id, models.UserProfile.date_of_birth,
+            models.UserProfile.gender, models.UserProfile.city,
+            models.UserProfile.era, models.UserProfile.vibe_tag,
+            models.UserProfile.is_face_verified, models.UserProfile.is_id_verified,
+            models.UserProfile.verification_status,
+            models.UserProfile.profession, models.UserProfile.education,
+            models.UserProfile.relationship_intentions, models.UserProfile.interests,
+        ),
+        selectinload(models.UserProfile.photos),
+    )
+
+    all_rows = query.all()
+
+    target_interests = set()
+    for item in interests:
+        for piece in item.split(","):
+            p = piece.strip().lower()
+            if p:
+                target_interests.add(p)
+
+    user_interests = set(str(i).strip().lower() for i in (requester_profile.interests or []) if str(i).strip())
+    q_clean = q.strip().lower() if q and q.strip() else None
+
+    scored_candidates = []
+    for user, profile in all_rows:
+        cand_interests_list = [str(i).strip() for i in (profile.interests or []) if str(i).strip()]
+        cand_interests_lower = {i.lower() for i in cand_interests_list}
+
+        if target_interests and not target_interests.intersection(cand_interests_lower):
+            continue
+
+        text_corpus = f"{user.full_name or ''} {user.username or ''} {user.bio or ''} {profile.profession or ''} {profile.city or ''} {' '.join(cand_interests_list)}".lower()
+        if q_clean and q_clean not in text_corpus:
+            continue
+
+        shared_interests_matched = [i for i in cand_interests_list if i.lower() in user_interests]
+        shared_count = len(shared_interests_matched)
+
+        score = float(shared_count * 15.0)
+        if q_clean:
+            name_str = f"{user.full_name or ''} {user.username or ''}".lower()
+            if q_clean in name_str:
+                score += 30.0
+            if profile.profession and q_clean in profile.profession.lower():
+                score += 20.0
+            if profile.city and q_clean in profile.city.lower():
+                score += 15.0
+            if any(q_clean in i.lower() for i in cand_interests_list):
+                score += 15.0
+
+        if profile.era and requester_profile.era and profile.era == requester_profile.era:
+            score += 10.0
+
+        photo_urls = [p.photo_url for p in (profile.photos or [])]
+        primary_photo = photo_urls[0] if photo_urls else None
+
+        candidate_resp = schemas.SearchCandidateResponse(
+            user_id=user.id,
+            username=user.username,
+            full_name=user.full_name,
+            age=_profile_age(profile),
+            city=profile.city,
+            era=profile.era,
+            vibe_tag=profile.vibe_tag,
+            bio=user.bio,
+            profession=profile.profession,
+            education=profile.education,
+            relationship_intentions=profile.relationship_intentions,
+            interests=cand_interests_list,
+            photos=photo_urls,
+            photo_url=primary_photo,
+            is_verified=True,
+            shared_interests=shared_interests_matched,
+            shared_interests_count=shared_count,
+            relevance_score=round(score, 1),
+        )
+        scored_candidates.append(candidate_resp)
+
+    scored_candidates.sort(key=lambda c: (-c.relevance_score, c.user_id))
+
+    total = len(scored_candidates)
+    paginated = scored_candidates[offset : offset + limit]
+    has_more = (offset + limit) < total
+
+    return schemas.SearchListResponse(
+        results=paginated,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=has_more,
+    )

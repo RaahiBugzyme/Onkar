@@ -1,5 +1,5 @@
-import { getDemoCandidateById } from './demoAppData'
-import { TWENTY_DEMO_PROFILES } from './demoProfiles'
+import { getDemoCandidateById, getDemoMatches, ensureDemoConversation } from './demoAppData.ts'
+import { TWENTY_DEMO_PROFILES } from './demoProfiles.ts'
 
 export interface DemoProfile {
   id: number
@@ -20,6 +20,9 @@ export interface DemoProfile {
   vibeTag: string
   connectionText: string
   initials: string
+  photo: string
+  photos: string[]
+  isMatch: boolean
 }
 
 export interface DemoChatMessage {
@@ -55,6 +58,9 @@ export const DEMO_PROFILES: DemoProfile[] = TWENTY_DEMO_PROFILES.map(p => ({
   vibeTag: p.vibeTag || 'Vibing on Raahi',
   connectionText: 'You two are connected — say hi!',
   initials: p.initials,
+  photo: p.photos[0],
+  photos: p.photos,
+  isMatch: p.isMatch,
 }))
 
 const DEMO_STORAGE_KEY = 'raahi_demo_chat_messages_v2'
@@ -312,24 +318,98 @@ function getInitialDemoMessages(): Record<number, DemoChatMessage[]> {
         reactions: [],
       },
     ],
+    921: [
+      {
+        id: 92101,
+        chatId: 921,
+        senderId: 1,
+        content: 'Hey! What are you building or creating this week? 🏺',
+        createdAt: new Date(now - 900000).toISOString(),
+        isRead: false,
+        isDelivered: true,
+        messageType: 'text',
+        reactions: [],
+      },
+    ],
+    922: [
+      {
+        id: 92201,
+        chatId: 922,
+        senderId: 1,
+        content: 'That dosa recommendation was elite! 🎮',
+        createdAt: new Date(now - 3600000).toISOString(),
+        isRead: true,
+        isDelivered: true,
+        messageType: 'text',
+        reactions: [],
+      },
+    ],
+    924: [
+      {
+        id: 92401,
+        chatId: 924,
+        senderId: 1,
+        content: 'Have you ever heard Dastangoi live? It will blow your mind 📖',
+        createdAt: new Date(now - 10800000).toISOString(),
+        isRead: false,
+        isDelivered: true,
+        messageType: 'text',
+        reactions: [],
+      },
+    ],
+    926: [
+      {
+        id: 92601,
+        chatId: 926,
+        senderId: 1,
+        content: 'Let us check out the new gallery opening this Thursday! 🍷',
+        createdAt: new Date(now - 1800000).toISOString(),
+        isRead: true,
+        isDelivered: true,
+        messageType: 'text',
+        reactions: [],
+      },
+    ],
+    930: [
+      {
+        id: 93001,
+        chatId: 930,
+        senderId: 1,
+        content: 'Fresh cardamom buns just came out of the oven! 🥐',
+        createdAt: new Date(now - 600000).toISOString(),
+        isRead: false,
+        isDelivered: true,
+        messageType: 'text',
+        reactions: [],
+      },
+    ],
   }
 }
 
+let memoryMessageStore: Record<number, DemoChatMessage[]> | null = null
+
 export function loadDemoMessagesStore(): Record<number, DemoChatMessage[]> {
   try {
-    const raw = sessionStorage.getItem(DEMO_STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as Record<number, DemoChatMessage[]>
+    if (typeof sessionStorage !== 'undefined') {
+      const raw = sessionStorage.getItem(DEMO_STORAGE_KEY)
+      if (raw) return JSON.parse(raw) as Record<number, DemoChatMessage[]>
+    }
   } catch {
     // fallback
   }
+  if (memoryMessageStore) return memoryMessageStore
   const initial = getInitialDemoMessages()
+  memoryMessageStore = initial
   saveDemoMessagesStore(initial)
   return initial
 }
 
 export function saveDemoMessagesStore(data: Record<number, DemoChatMessage[]>) {
+  memoryMessageStore = data
   try {
-    sessionStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(data))
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(data))
+    }
   } catch {
     // ignore
   }
@@ -346,6 +426,11 @@ export function appendDemoMessage(chatId: number, message: DemoChatMessage): Dem
   const next = [...list, message]
   store[chatId] = next
   saveDemoMessagesStore(store)
+
+  // Ensure this demo candidate is saved in conversations with updated message preview
+  if (message.content) {
+    ensureDemoConversation(chatId, message.content)
+  }
   return next
 }
 
@@ -370,10 +455,11 @@ export function isDemoChat(chatId: number): boolean {
 }
 
 export function getDemoProfile(chatId: number): DemoProfile | undefined {
-  const found = DEMO_PROFILES.find(p => p.chatId === chatId)
-  if (found) return found
   const candidate = getDemoCandidateById(chatId)
   if (candidate) {
+    const store = loadDemoMessagesStore()
+    const msgs = store[chatId] || []
+    const lastMsg = msgs.length ? msgs[msgs.length - 1] : null
     return {
       id: candidate.id,
       chatId: candidate.chatId,
@@ -385,15 +471,73 @@ export function getDemoProfile(chatId: number): DemoProfile | undefined {
       ringColor: candidate.ringColor,
       status: candidate.status,
       lastSeen: candidate.lastSeen,
-      lastMessage: candidate.lastMessage || 'Say hi! 👋',
-      lastMessageTime: candidate.lastMessageTime || 'Just now',
-      unread: false,
-      isNew: true,
+      lastMessage: lastMsg?.content || candidate.lastMessage || 'Say hi! 👋',
+      lastMessageTime: lastMsg ? 'Just now' : (candidate.lastMessageTime || 'Just now'),
+      unread: candidate.unread ?? false,
+      isNew: candidate.isNew ?? true,
       cornerEmoji: candidate.cornerEmoji,
       vibeTag: candidate.vibeTag || 'Vibing',
       connectionText: 'You two are connected — say hi!',
       initials: candidate.initials,
+      photo: candidate.photos[0],
+      photos: candidate.photos,
+      isMatch: candidate.isMatch,
     }
   }
-  return undefined
+
+  const found = DEMO_PROFILES.find(p => p.chatId === chatId)
+  if (found) {
+    const store = loadDemoMessagesStore()
+    const msgs = store[chatId] || []
+    const lastMsg = msgs.length ? msgs[msgs.length - 1] : null
+    if (lastMsg?.content) {
+      return {
+        ...found,
+        lastMessage: lastMsg.content,
+        lastMessageTime: 'Just now',
+      }
+    }
+  }
+  return found
+}
+
+export function getDemoConversationProfiles(): DemoProfile[] {
+  const store = loadDemoMessagesStore()
+  const matchedCandidates = getDemoMatches()
+  const messagedIds = Object.keys(store)
+    .map(Number)
+    .filter(id => (store[id] || []).length > 0)
+
+  // Merge unique candidate IDs that are matched or have messages
+  const seenIds = new Set<number>()
+  const result: DemoProfile[] = []
+
+  // Add all matched candidates from demoAppData
+  for (const c of matchedCandidates) {
+    if (!seenIds.has(c.id)) {
+      seenIds.add(c.id)
+      const prof = getDemoProfile(c.id)
+      if (prof) result.push(prof)
+    }
+  }
+
+  // Add any other profiles that have active messages
+  for (const id of messagedIds) {
+    if (!seenIds.has(id)) {
+      seenIds.add(id)
+      const prof = getDemoProfile(id)
+      if (prof) result.push(prof)
+    }
+  }
+
+  // Fallback to initial match profiles so user always has conversations to see
+  for (const p of DEMO_PROFILES) {
+    if (p.isMatch && !seenIds.has(p.id)) {
+      seenIds.add(p.id)
+      const prof = getDemoProfile(p.id)
+      if (prof) result.push(prof)
+    }
+  }
+
+  return result
 }

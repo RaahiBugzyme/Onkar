@@ -4,7 +4,8 @@ import { AccountAccess } from '../components/AccountAccess'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
-import { ApiError, fetchProtectedBlob, getAuthToken } from '../api/client'
+import { ApiError, fetchProtectedBlob, getAuthToken, resolveMediaUrl } from '../api/client'
+import { isDemoModeEnabled } from '../utils/demoEnvironment'
 import { mergeChatMessage, reduceChatMessages } from '../api/chatState'
 import {
   chatSocketUrl, deleteConversation, deleteMessage, fetchChats, fetchCoach, fetchInsights,
@@ -15,8 +16,8 @@ import {
 import { useAuth } from '../state/AuthContext'
 import { useTheme } from '../state/ThemeContext'
 import {
-  DEMO_PROFILES, getDemoProfile, getDemoMessages, appendDemoMessage, addDemoReaction,
-  isDemoChat
+  getDemoProfile, getDemoMessages, appendDemoMessage, addDemoReaction,
+  isDemoChat, getDemoConversationProfiles, type DemoProfile
 } from '../data/demoChatData'
 import { getDemoMatches, getDemoCandidateById, type DemoCandidate } from '../data/demoAppData'
 import '../styles/matches.css'
@@ -36,7 +37,10 @@ function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? '').join('') || 'R'
 }
 
-function Avatar({ name, small = false }: { name: string; small?: boolean }) {
+function Avatar({ name, photo, small = false }: { name: string; photo?: string | null; small?: boolean }) {
+  if (photo) {
+    return <img src={resolveMediaUrl(photo)} alt={name} className={`matches-avatar${small ? ' small' : ''}`} style={{ objectFit: 'cover' }} />
+  }
   return <span className={`matches-avatar${small ? ' small' : ''}`} aria-hidden="true">{initials(name)}</span>
 }
 
@@ -61,7 +65,7 @@ export function MatchesPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
-  const [celebratingMatch, setCelebratingMatch] = useState<{ name: string; initials: string; ringColor: string; chatId: number } | null>(null)
+  const [celebratingMatch, setCelebratingMatch] = useState<{ name: string; initials: string; ringColor: string; chatId: number; photo?: string } | null>(null)
 
   const demoMatches = useMemo(() => getDemoMatches(), [])
 
@@ -98,7 +102,7 @@ export function MatchesPage() {
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
 
-  const isDemo = !user || matches.length === 0
+  const isDemo = isDemoModeEnabled() || !user
   const displayCount = isDemo ? filteredDemo.length : filteredReal.length
 
   return (
@@ -136,28 +140,61 @@ export function MatchesPage() {
         {/* Scrollable Matches Content Container */}
         <div className="matches-scroll-content">
           {/* NEW MATCHES Section */}
-          <section className="matches-section" aria-label="New matches">
-            <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
-            <div className="new-matches-scroll">
-              {demoMatches.map(match => (
-                <div
-                  key={match.id}
-                  className="new-match-avatar-card"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setCelebratingMatch({ name: match.name, initials: match.initials, ringColor: match.ringColor, chatId: match.chatId })}
-                  title={`Celebrate match with ${match.name}`}
-                >
-                  <span className="new-match-pill">NEW</span>
-                  <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
-                    <span className="new-match-initial">{match.initials}</span>
-                    <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
-                  </div>
-                  <span className="new-match-name">{match.name}</span>
-                  <span className="new-match-status">{match.status}</span>
-                </div>
-              ))}
-            </div>
-          </section>
+          {((!isDemo && matches.length > 0) || isDemo) && (
+            <section className="matches-section" aria-label="New matches">
+              <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
+              <div className="new-matches-scroll">
+                {isDemo ? (
+                  demoMatches.map(match => (
+                    <div
+                      key={match.id}
+                      className="new-match-avatar-card"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setCelebratingMatch({ name: match.name, initials: match.initials, ringColor: match.ringColor, chatId: match.chatId, photo: match.photos?.[0] })}
+                      title={`Celebrate match with ${match.name}`}
+                    >
+                      <span className="new-match-pill">NEW</span>
+                      <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
+                        {match.photos?.[0] ? (
+                          <img src={resolveMediaUrl(match.photos[0])} alt={match.name} className="new-match-avatar-img" />
+                        ) : (
+                          <span className="new-match-initial">{match.initials}</span>
+                        )}
+                        <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
+                      </div>
+                      <span className="new-match-name">{match.name}</span>
+                      <span className="new-match-status">{match.status}</span>
+                    </div>
+                  ))
+                ) : (
+                  matches.slice(0, 10).map(match => {
+                    const name = match.matched_user.full_name || match.matched_user.username || 'Match'
+                    const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
+                    return (
+                      <Link
+                        key={match.id}
+                        to={`/conversations/${match.chat_id}`}
+                        className="new-match-avatar-card"
+                        title={`Chat with ${name}`}
+                      >
+                        <span className="new-match-pill">NEW</span>
+                        <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
+                          {photo ? (
+                            <img src={resolveMediaUrl(photo)} alt={name} className="new-match-avatar-img" />
+                          ) : (
+                            <span className="new-match-initial">{initials(name)}</span>
+                          )}
+                          <span className="new-match-corner" aria-hidden="true">💖</span>
+                        </div>
+                        <span className="new-match-name">{name}</span>
+                        <span className="new-match-status">{match.city || 'Active'}</span>
+                      </Link>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+          )}
 
           {/* MUTUAL CONNECTIONS Section */}
           <section className="matches-section" aria-label="Mutual connections">
@@ -253,7 +290,11 @@ export function MatchesPage() {
                 className="celebration-avatar-ring"
                 style={{ borderColor: celebratingMatch.ringColor, boxShadow: `0 0 24px ${celebratingMatch.ringColor}` }}
               >
-                <span>{celebratingMatch.initials}</span>
+                {celebratingMatch.photo ? (
+                  <img src={resolveMediaUrl(celebratingMatch.photo)} alt={celebratingMatch.name} className="celebration-avatar-img" />
+                ) : (
+                  <span>{celebratingMatch.initials}</span>
+                )}
               </div>
             </div>
             <div className="celebration-actions">
@@ -290,7 +331,11 @@ function DemoMatchCard({
     <Card className="matches-card card-enter" style={{ padding: '18px 20px', borderRadius: 20 }}>
       <div className="matches-card-top">
         <div className="conv-row-avatar-ring" style={{ borderColor: candidate.ringColor, boxShadow: `0 0 14px ${candidate.ringColor}55`, width: 50, height: 50 }}>
-          <span className="conv-row-initial" style={{ fontSize: '1.25rem' }}>{candidate.initials}</span>
+          {candidate.photos?.[0] ? (
+            <img src={resolveMediaUrl(candidate.photos[0])} alt={candidate.name} className="conv-row-avatar-img" />
+          ) : (
+            <span className="conv-row-initial" style={{ fontSize: '1.25rem' }}>{candidate.initials}</span>
+          )}
           <span className="conv-row-corner" style={{ width: 18, height: 18, fontSize: '.72rem' }} aria-hidden="true">{candidate.cornerEmoji}</span>
         </div>
         <span className="matches-status" style={{ borderColor: `${candidate.ringColor}55`, color: candidate.ringColor }}>
@@ -327,10 +372,11 @@ function DemoMatchCard({
 
 function MatchCard({ match }: { match: MatchItem }) {
   const name = match.matched_user.full_name || match.matched_user.username || 'Raahi member'
+  const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
   return (
     <Card className="matches-card card-enter" style={{ padding: '18px 20px', borderRadius: 20 }}>
       <div className="matches-card-top">
-        <Avatar name={name} small />
+        <Avatar name={name} photo={photo} small />
         <span className="matches-status">Active match</span>
       </div>
       <h3 style={{ fontSize: '1.25rem', margin: '10px 0 2px' }}>
@@ -396,8 +442,14 @@ export function MatchDetailPage() {
         <Card className="match-detail-card card-enter">
           <span className="matches-detail-glow" aria-hidden="true" />
           <p className="integration-eyebrow">MUTUAL CONNECTION</p>
-          <div className="intro-avatar-circle" style={{ borderColor: demoCandidate.ringColor, boxShadow: `0 0 24px ${demoCandidate.ringColor}55`, margin: '14px auto' }}>
-            <span className="intro-avatar-letter">{demoCandidate.initials}</span>
+          <div className="match-detail-avatar-wrap">
+            <div className="intro-avatar-circle" style={{ borderColor: demoCandidate.ringColor, boxShadow: `0 0 24px ${demoCandidate.ringColor}55`, margin: '14px auto', overflow: 'hidden' }}>
+              {demoCandidate.photos?.[0] ? (
+                <img src={resolveMediaUrl(demoCandidate.photos[0])} alt={demoCandidate.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <span className="intro-avatar-letter">{demoCandidate.initials}</span>
+              )}
+            </div>
           </div>
           <h1>
             {demoCandidate.name}, {demoCandidate.age}
@@ -409,6 +461,13 @@ export function MatchDetailPage() {
             <span className="e e-tada">✓</span> Verified connection
           </span>
           <p className="match-detail-disclaimer">{demoCandidate.bio}</p>
+          {demoCandidate.photos && demoCandidate.photos.length > 1 && (
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '14px auto', flexWrap: 'wrap' }}>
+              {demoCandidate.photos.slice(1).map((p, idx) => (
+                <img key={idx} src={resolveMediaUrl(p)} alt={`${demoCandidate.name} gallery ${idx + 2}`} style={{ width: 84, height: 104, borderRadius: 14, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.15)' }} />
+              ))}
+            </div>
+          )}
           {demoCandidate.tags && demoCandidate.tags.length > 0 && (
             <div className="discover-tags" style={{ justifyContent: 'center', margin: '14px auto' }}>
               {demoCandidate.tags.map((t, idx) => (
@@ -456,29 +515,58 @@ export function ConversationsPage() {
   const { user, loading: authLoading } = useAuth()
   const { generation } = useTheme()
   const [chats, setChats] = useState<ChatSummary[]>([])
+  const [matches, setMatches] = useState<MatchItem[]>([])
   const [chatError, setChatError] = useState('')
   const [search, setSearch] = useState('')
+  const [demoConversations, setDemoConversations] = useState<DemoProfile[]>(() => getDemoConversationProfiles())
 
   const load = useCallback(async () => {
     if (!user) return
     setChatError('')
-    try { setChats(await fetchChats()) }
+    try {
+      const [chatList, matchList] = await Promise.all([
+        fetchChats(),
+        fetchMatches().catch(() => ({ matches: [] as MatchItem[] })),
+      ])
+      setChats(chatList)
+      setMatches(matchList.matches || [])
+    }
     catch (reason) { setChatError(apiErrorMessage(reason, 'Your conversations could not be loaded.')) }
   }, [user])
 
-  useEffect(() => { if (user) void load() }, [load, user])
+  useEffect(() => {
+    if (user) void load()
+    setDemoConversations(getDemoConversationProfiles())
+  }, [load, user])
 
   const eraModeLabel = generation === 'millennial' ? 'Millennial Mode' : generation === 'zillenial' ? 'Zillenial Mode' : 'Gen Z Mode'
   const eraModeIcon = generation === 'millennial' ? '⚡' : generation === 'zillenial' ? '🎭' : '💀'
 
-  const filteredMatches = DEMO_PROFILES.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
-  const filteredConversations = DEMO_PROFILES.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.lastMessage.toLowerCase().includes(search.trim().toLowerCase()))
+  const filteredMatches = useMemo(() => {
+    return demoConversations.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
+  }, [demoConversations, search])
+
+  const filteredConversations = useMemo(() => {
+    return demoConversations.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.lastMessage.toLowerCase().includes(search.trim().toLowerCase()))
+  }, [demoConversations, search])
+
+  const filteredChats = useMemo(() => {
+    return chats.filter(c => {
+      const q = search.trim().toLowerCase()
+      if (!q) return true
+      const name = `${c.user?.full_name || ''} ${c.user?.username || ''}`.toLowerCase()
+      const lastMsg = (c.last_message?.content || '').toLowerCase()
+      return name.includes(q) || lastMsg.includes(q)
+    })
+  }, [chats, search])
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
 
-  const isDemoChatList = !user || chats.length === 0
-  const unreadCount = DEMO_PROFILES.filter(p => p.unread).length
-  const chatCount = isDemoChatList ? filteredConversations.length : (chats.length || filteredConversations.length)
+  const isDemoChatList = isDemoModeEnabled() || !user
+  const unreadCount = isDemoChatList
+    ? demoConversations.filter(p => p.unread).length
+    : chats.filter(c => (c.unread_count ?? 0) > 0).length
+  const chatCount = isDemoChatList ? filteredConversations.length : chats.length
 
   return (
     <PageContainer className="matches-page conversations-page page-enter">
@@ -517,65 +605,124 @@ export function ConversationsPage() {
         {/* Scrollable Conversations Content Container */}
         <div className="matches-scroll-content">
           {/* NEW MATCHES Section */}
-          <section className="matches-section" aria-label="New matches">
-            <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
-            <div className="new-matches-scroll">
-              {filteredMatches.map(match => (
-                <Link
-                  key={match.id}
-                  to={`/conversations/${match.chatId}`}
-                  className="new-match-avatar-card"
-                  aria-label={`Open conversation with ${match.name}`}
-                >
-                  <span className="new-match-pill">NEW</span>
-                  <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
-                    <span className="new-match-initial">{match.initials}</span>
-                    <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
-                  </div>
-                  <span className="new-match-name">{match.name}</span>
-                  <span className="new-match-status">{match.status}</span>
-                </Link>
-              ))}
-            </div>
-          </section>
+          {((!isDemoChatList && matches.length > 0) || isDemoChatList) && (
+            <section className="matches-section" aria-label="New matches">
+              <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
+              <div className="new-matches-scroll">
+                {isDemoChatList ? (
+                  filteredMatches.map(match => (
+                    <Link
+                      key={match.id}
+                      to={`/conversations/${match.chatId}`}
+                      className="new-match-avatar-card"
+                      aria-label={`Open conversation with ${match.name}`}
+                    >
+                      <span className="new-match-pill">NEW</span>
+                      <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
+                        {match.photo ? (
+                          <img src={resolveMediaUrl(match.photo)} alt={match.name} className="new-match-avatar-img" />
+                        ) : (
+                          <span className="new-match-initial">{match.initials}</span>
+                        )}
+                        <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
+                      </div>
+                      <span className="new-match-name">{match.name}</span>
+                      <span className="new-match-status">{match.status}</span>
+                    </Link>
+                  ))
+                ) : (
+                  matches.slice(0, 10).map(match => {
+                    const name = match.matched_user.full_name || match.matched_user.username || 'Match'
+                    const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
+                    return (
+                      <Link
+                        key={match.id}
+                        to={`/conversations/${match.chat_id}`}
+                        className="new-match-avatar-card"
+                        aria-label={`Open conversation with ${name}`}
+                      >
+                        <span className="new-match-pill">NEW</span>
+                        <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
+                          {photo ? (
+                            <img src={resolveMediaUrl(photo)} alt={name} className="new-match-avatar-img" />
+                          ) : (
+                            <span className="new-match-initial">{initials(name)}</span>
+                          )}
+                          <span className="new-match-corner" aria-hidden="true">💖</span>
+                        </div>
+                        <span className="new-match-name">{name}</span>
+                        <span className="new-match-status">{match.city || 'Active'}</span>
+                      </Link>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+          )}
 
           {/* CONVERSATIONS Section */}
           <section className="matches-section" aria-label="Conversations">
             <h2 className="matches-section-heading">💬 CONVERSATIONS</h2>
             <div className="conversations-cards-column">
-              {/* Real API chats if any */}
-              {chats.map(chat => (
-                <ConversationRow key={chat.chat_id} chat={chat} />
-              ))}
-
-              {/* Demo conversation cards */}
-              {filteredConversations.map(conv => (
-                <Link
-                  key={conv.id}
-                  to={`/conversations/${conv.chatId}`}
-                  className="conversation-card-row"
-                >
-                  <div className="conv-row-avatar-ring" style={{ borderColor: conv.ringColor, boxShadow: `0 0 10px ${conv.ringColor}44` }}>
-                    <span className="conv-row-initial">{conv.initials}</span>
-                    <span className="conv-row-corner" aria-hidden="true">{conv.cornerEmoji}</span>
-                  </div>
-                  <div className="conv-row-body">
-                    <div className="conv-row-head">
-                      <span className="conv-row-name">{conv.name}</span>
-                      {conv.isNew && <span className="conv-row-new-pill">New</span>}
+              {isDemoChatList ? (
+                filteredConversations.map(conv => (
+                  <Link
+                    key={conv.id}
+                    to={`/conversations/${conv.chatId}`}
+                    className="conversation-card-row"
+                  >
+                    <div className="conv-row-avatar-ring" style={{ borderColor: conv.ringColor, boxShadow: `0 0 10px ${conv.ringColor}44` }}>
+                      {conv.photo ? (
+                        <img src={resolveMediaUrl(conv.photo)} alt={conv.name} className="conv-row-avatar-img" />
+                      ) : (
+                        <span className="conv-row-initial">{conv.initials}</span>
+                      )}
+                      <span className="conv-row-corner" aria-hidden="true">{conv.cornerEmoji}</span>
                     </div>
-                    <p className="conv-row-msg">{conv.lastMessage}</p>
-                    <p className="conv-row-seen">
-                      <span className="conv-seen-eye">👁</span> {conv.lastSeen}
-                    </p>
-                  </div>
-                  <div className="conv-row-end">
-                    <span className="conv-row-era-pill" style={{ borderColor: `${conv.ringColor}66`, color: conv.ringColor }}>
-                      {conv.eraBadge}
-                    </span>
-                  </div>
-                </Link>
-              ))}
+                    <div className="conv-row-body">
+                      <div className="conv-row-head">
+                        <span className="conv-row-name">{conv.name}</span>
+                        {conv.unread && <span className="conv-row-unread-dot" aria-label="Unread message" />}
+                        {conv.isNew && <span className="conv-row-new-pill">New</span>}
+                      </div>
+                      <p className="conv-row-msg">{conv.lastMessage}</p>
+                      <p className="conv-row-seen">
+                        <span className="conv-seen-eye">👁</span> {conv.lastSeen}
+                      </p>
+                    </div>
+                    <div className="conv-row-end">
+                      <span className="conv-row-time">{conv.lastMessageTime}</span>
+                      <span className="conv-row-era-pill" style={{ borderColor: `${conv.ringColor}66`, color: conv.ringColor }}>
+                        {conv.eraBadge}
+                      </span>
+                    </div>
+                  </Link>
+                ))
+              ) : filteredChats.length > 0 ? (
+                filteredChats.map(chat => (
+                  <ConversationRow key={chat.chat_id} chat={chat} />
+                ))
+              ) : (
+                <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
+                  <span className="matches-empty-icon" aria-hidden="true">💬</span>
+                  <p className="integration-eyebrow">NO CONVERSATIONS YET</p>
+                  <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>
+                    {search.trim() ? `No chats found matching “${search}”` : 'Say hello to your matches'}
+                  </h3>
+                  <p style={{ fontSize: '.84rem' }}>
+                    {search.trim()
+                      ? 'Try searching with another name or keyword.'
+                      : 'When you match with someone, your messages and chats will appear here.'}
+                  </p>
+                  {!search.trim() && (
+                    <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
+                      <Link className="matches-primary-button" to="/matches">
+                        View Matches 💖
+                      </Link>
+                    </div>
+                  )}
+                </Card>
+              )}
             </div>
           </section>
         </div>
@@ -599,7 +746,7 @@ export function ConversationsPage() {
 function ConversationRow({ chat }: { chat: ChatSummary }) {
   const message = chat.last_message?.is_deleted ? 'Message deleted' : chat.last_message?.content || (chat.last_message?.message_type === 'image' ? 'Photo' : chat.last_message?.message_type === 'voice' ? 'Voice message' : 'Start a conversation')
   return <Link className="conversation-card-row" to={`/conversations/${chat.chat_id}`}>
-    <Avatar name={chat.user.full_name || chat.user.username} small />
+    <Avatar name={chat.user.full_name || chat.user.username} photo={chat.user.photo_url || chat.user.photos?.[0]} small />
     <div className="conv-row-body">
       <div className="conv-row-head">
         <strong className="conv-row-name">{chat.user.full_name || chat.user.username}{chat.user.is_online && <span className="online-indicator" aria-label="Online" />}</strong>
@@ -673,9 +820,9 @@ function getEraLabel(era: string | null | undefined) {
 export function ConversationPage() {
   const { conversationId } = useParams()
   const chatId = Number(conversationId)
-  const isDemo = isDemoChat(chatId)
-  const validChatId = (Number.isInteger(chatId) && chatId > 0) || isDemo
   const { user, loading: authLoading } = useAuth()
+  const isDemo = (isDemoModeEnabled() || !user) && isDemoChat(chatId)
+  const validChatId = (Number.isInteger(chatId) && chatId > 0) || isDemo
   const { generation } = useTheme()
   const token = getAuthToken()
 
@@ -704,7 +851,7 @@ export function ConversationPage() {
   const [showAiDrawer, setShowAiDrawer] = useState(false)
   const [callNotice, setCallNotice] = useState<string | null>(null)
   const [recordDuration, setRecordDuration] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const retryTimerRef = useRef<number | null>(null)
   const typingTimerRef = useRef<number | null>(null)
@@ -740,7 +887,7 @@ export function ConversationPage() {
       const mapped: ChatMessage[] = rawDemoMsgs.map(m => ({
         id: m.id,
         chat_id: chatId,
-        sender_id: m.senderId === 0 ? (user?.id ?? 0) : demoProfile.id,
+        sender_id: m.senderId === 0 ? 0 : demoProfile.id,
         content: m.content,
         created_at: m.createdAt,
         read_at: m.isRead ? m.createdAt : null,
@@ -932,7 +1079,7 @@ export function ConversationPage() {
       const newMsg: ChatMessage = {
         id: Date.now(),
         chat_id: chatId,
-        sender_id: user?.id ?? 0,
+        sender_id: 0,
         content: content,
         created_at: new Date().toISOString(),
         read_at: new Date().toISOString(),
@@ -963,52 +1110,6 @@ export function ConversationPage() {
       })
       setMessages(current => [...current, newMsg])
       setDraft(''); setReplyTo(null); setShowEmojiPicker(false)
-
-      // Trigger realistic simulated response from Jeet
-      window.setTimeout(() => setTyping(true), 800)
-      window.setTimeout(() => {
-        setTyping(false)
-        const replies = [
-          "Haha that's great! What are you up to today? ✨",
-          "Totally! Glad we matched on Raahi 👋",
-          "That's so true honestly 😂",
-          "Let's grab coffee or bubble tea sometime!",
-        ]
-        const replyText = replies[Math.floor(Math.random() * replies.length)]
-        const replyMsg: ChatMessage = {
-          id: Date.now() + 1,
-          chat_id: chatId,
-          sender_id: demoProfile.id,
-          content: replyText,
-          created_at: new Date().toISOString(),
-          read_at: null,
-          is_delivered: true,
-          is_read: false,
-          is_deleted: false,
-          reply_to_id: null,
-          message_type: 'text',
-          audio_url: null,
-          audio_duration: null,
-          audio_mime_type: null,
-          attachment_name: null,
-          attachment_mime_type: null,
-          attachment_size_bytes: null,
-          reactions: [],
-          reaction_revision: 1
-        }
-        appendDemoMessage(chatId, {
-          id: replyMsg.id,
-          chatId,
-          senderId: 1,
-          content: replyText,
-          createdAt: replyMsg.created_at ?? new Date().toISOString(),
-          isRead: false,
-          isDelivered: true,
-          messageType: 'text',
-          reactions: []
-        })
-        setMessages(current => [...current, replyMsg])
-      }, 2200)
       return
     }
 
@@ -1264,6 +1365,7 @@ export function ConversationPage() {
 
   const partner = isDemo ? null : chat?.user
   const partnerName = isDemo ? (demoProfile?.name ?? 'Connection') : (partner?.full_name || partner?.username || match?.matched_user.full_name || match?.matched_user.username || 'Raahi member')
+  const partnerPhoto = isDemo ? (demoProfile?.photo ?? null) : (partner?.photo_url || partner?.photos?.[0] || match?.photos?.[0] || match?.matched_user.photo_url || match?.matched_user.photos?.[0] || null)
   const partnerInitial = isDemo ? (demoProfile?.initials ?? '?') : initials(partnerName)
   const ringColor = isDemo ? (demoProfile?.ringColor ?? '#f59e0b') : 'var(--ep)'
   const canUseExternalAi = isDemo || Boolean(user?.ai_provider_processing_enabled)
@@ -1280,12 +1382,23 @@ export function ConversationPage() {
           </Link>
           <div className="chat-header-avatar-wrap">
             <div className="chat-avatar-ring" style={{ borderColor: ringColor, boxShadow: `0 0 12px ${ringColor}66` }}>
-              <span className="chat-avatar-letter">{partnerInitial}</span>
+              {partnerPhoto ? (
+                <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="chat-avatar-photo" />
+              ) : (
+                <span className="chat-avatar-letter">{partnerInitial}</span>
+              )}
               {isDemo && <span className="chat-avatar-corner" aria-hidden="true">{demoProfile?.cornerEmoji ?? '🎭'}</span>}
             </div>
           </div>
           <div className="chat-header-copy">
-            <h1 className="chat-header-title">{partnerName}</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <h1 className="chat-header-title">{partnerName}</h1>
+              {isDemo && (
+                <span style={{ fontSize: '.6rem', padding: '1px 6px', borderRadius: 999, background: 'rgba(139,92,246,0.25)', border: '1px solid rgba(139,92,246,0.45)', color: '#d8b4fe', fontWeight: 800, letterSpacing: '.03em' }}>
+                  SAMPLE PROFILE
+                </span>
+              )}
+            </div>
             <p className="chat-header-status-line">
               <span className="chat-seen-eye">👁</span> {isDemo ? demoProfile?.lastSeen : (presence ? 'Active now' : partner?.last_seen ? formatLastSeen(partner.last_seen, false) : 'Active mutual match')}
             </p>
@@ -1328,8 +1441,12 @@ export function ConversationPage() {
           <div className="match-intro-card card-enter">
             <div className="intro-avatar-container">
               <div className="intro-avatar-halo" aria-hidden="true" style={{ background: `radial-gradient(circle, ${ringColor}66, transparent 70%)` }} />
-              <div className="intro-avatar-circle" style={{ borderColor: ringColor, boxShadow: `0 0 22px ${ringColor}55` }}>
-                <span className="intro-avatar-letter">{partnerInitial}</span>
+              <div className="intro-avatar-circle" style={{ borderColor: ringColor, boxShadow: `0 0 22px ${ringColor}55`, overflow: 'hidden' }}>
+                {partnerPhoto ? (
+                  <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="intro-avatar-photo" />
+                ) : (
+                  <span className="intro-avatar-letter">{partnerInitial}</span>
+                )}
               </div>
             </div>
             <h2 className="intro-name">{partnerName}</h2>
@@ -1351,8 +1468,12 @@ export function ConversationPage() {
           {messages.map(message => (
             <article className={`message-row ${message.sender_id === (user?.id ?? 0) ? 'outgoing' : 'incoming'}`} key={message.id}>
               {message.sender_id !== (user?.id ?? 0) && (
-                <div className="message-partner-avatar-ring" style={{ borderColor: ringColor }}>
-                  <span>{partnerInitial}</span>
+                <div className="message-partner-avatar-ring" style={{ borderColor: ringColor, overflow: 'hidden' }}>
+                  {partnerPhoto ? (
+                    <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="message-partner-avatar-img" />
+                  ) : (
+                    <span>{partnerInitial}</span>
+                  )}
                 </div>
               )}
               <div className="message-bubble">
@@ -1459,9 +1580,9 @@ export function ConversationPage() {
 
             {/* 2. Rounded message input */}
             <div className="conversation-composer-field">
-              <input
+              <textarea
                 ref={inputRef}
-                type="text"
+                rows={1}
                 value={draft}
                 onChange={event => handleTyping(event.currentTarget.value)}
                 onKeyDown={event => {
@@ -1532,6 +1653,20 @@ export function ConversationPage() {
                   <line x1="8" y1="23" x2="16" y2="23"/>
                 </svg>
               )}
+            </button>
+
+            {/* 6. Send button */}
+            <button
+              type="submit"
+              className="chat-composer-btn chat-send-btn"
+              title="Send message"
+              aria-label="Send message"
+              disabled={!draft.trim() || busy || accessEnded}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: 'translateX(1px)' }}>
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
             </button>
           </form>
         ) : (

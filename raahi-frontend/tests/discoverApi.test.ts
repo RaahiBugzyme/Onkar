@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { clearAuthToken, setAuthToken } from '../src/api/client.ts'
-import { fetchFeed, submitSwipe } from '../src/api/discover.ts'
+import { fetchFeed, searchProfiles, submitSwipe } from '../src/api/discover.ts'
 import { getVerificationStatus, submitIdVerification } from '../src/api/verification.ts'
 
 const storage = new Map<string, string>()
@@ -64,4 +64,75 @@ test('verification state and ID evidence use the existing authenticated routes',
     assert.equal(uploadBody?.get('id_type'), 'id_college')
     assert.equal((uploadBody?.get('file') as File).name, 'id.png')
   } finally { globalThis.fetch = original; globalThis.XMLHttpRequest = originalXhr }
+})
+
+test('searchProfiles serializes query, interests, and filters to /api/v1/search', async () => {
+  const original = globalThis.fetch
+  let request: Request | undefined
+  setAuthToken('synthetic-search-token')
+  globalThis.fetch = async (input, init) => {
+    request = new Request(input, init)
+    return Response.json({
+      results: [
+        {
+          user_id: 42,
+          username: 'aarav_m',
+          full_name: 'Aarav Mehta',
+          age: 24,
+          city: 'Mumbai',
+          era: 'genz',
+          vibe_tag: 'Coffee lover',
+          bio: 'Exploring indie cafes and city sunsets',
+          profession: 'Product Designer',
+          education: 'NID Ahmedabad',
+          relationship_intentions: 'Long-term relationship',
+          interests: ['Coffee', 'Travel', 'Art'],
+          photos: ['/uploads/profiles/aarav.jpg'],
+          photo_url: '/uploads/profiles/aarav.jpg',
+          is_verified: true,
+          shared_interests: ['Coffee', 'Travel'],
+          shared_interests_count: 2,
+          relevance_score: 55.0,
+        }
+      ],
+      total: 1,
+      limit: 10,
+      offset: 0,
+      has_more: false,
+    })
+  }
+
+  try {
+    const res = await searchProfiles({
+      q: 'Aarav',
+      city: 'Mumbai',
+      profession: 'Designer',
+      relationship_intentions: 'Long-term relationship',
+      era: 'genz',
+      min_age: 22,
+      max_age: 30,
+      interests: ['Coffee', 'Travel'],
+      limit: 10,
+      offset: 0,
+    })
+
+    const url = new URL(request!.url)
+    assert.equal(url.pathname, '/api/v1/search')
+    assert.equal(url.searchParams.get('q'), 'Aarav')
+    assert.equal(url.searchParams.get('city'), 'Mumbai')
+    assert.equal(url.searchParams.get('profession'), 'Designer')
+    assert.equal(url.searchParams.get('relationship_intentions'), 'Long-term relationship')
+    assert.equal(url.searchParams.get('era'), 'genz')
+    assert.equal(url.searchParams.get('min_age'), '22')
+    assert.equal(url.searchParams.get('max_age'), '30')
+    assert.deepEqual(url.searchParams.getAll('interests'), ['Coffee', 'Travel'])
+    assert.equal(request!.headers.get('authorization'), 'Bearer synthetic-search-token')
+
+    assert.equal(res.total, 1)
+    assert.equal(res.results[0].full_name, 'Aarav Mehta')
+    assert.equal(res.results[0].shared_interests_count, 2)
+  } finally {
+    globalThis.fetch = original
+    clearAuthToken()
+  }
 })
