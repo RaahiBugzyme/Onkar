@@ -13,7 +13,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: auto;
   padding: calc(env(safe-area-inset-top, 0px) + clamp(16px, 3vh, 24px)) clamp(16px, 4vw, 24px) calc(env(safe-area-inset-bottom, 0px) + clamp(36px, 6vh, 64px));
   background: var(--bd, #0d0a1a);
   color: var(--flow-text);
@@ -301,6 +301,26 @@
   font-size: 16px; /* Prevents auto-zoom on iOS Safari */
 }
 
+/* ── Date-of-birth picker visibility on dark backgrounds ──
+   Without color-scheme: dark the browser renders the native calendar
+   icon and placeholder segments (mm/dd/yyyy) in system-light colours,
+   making them invisible on the near-black form background.            */
+.onboarding-profile-form input[type="date"] {
+  color-scheme: dark;
+  cursor: pointer;
+}
+
+.onboarding-profile-form input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.7;
+  filter: invert(0);                     /* keep light icon from color-scheme: dark */
+  transition: opacity 0.18s ease;
+}
+
+.onboarding-profile-form input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
 .onboarding-profile-form textarea {
   resize: vertical;
 }
@@ -310,6 +330,20 @@
 .onboarding-profile-form textarea:focus {
   outline: 2px solid var(--es);
   outline-offset: 2px;
+}
+
+.onboarding-profile-form input[aria-invalid="true"] {
+  border-color: rgba(255, 104, 151, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 104, 151, 0.25);
+}
+
+.onboarding-field-error {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #ff8ca3;
+  margin-top: 2px;
+  line-height: 1.4;
 }
 
 .onboarding-profile-form option {

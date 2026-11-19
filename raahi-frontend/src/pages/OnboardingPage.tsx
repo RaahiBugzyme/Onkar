@@ -6,6 +6,7 @@ import { useAuth } from '../state/AuthContext'
 import { useDatingProfile } from '../state/DatingProfileContext'
 import { useTheme } from '../state/ThemeContext'
 import { generationThemes, type GenerationId } from '../data/generations'
+import { validateDateOfBirth, mapApiValidationErrors, getMaxSelectableDob } from '../utils/dobValidation'
 import '../styles/onboarding-flow.css'
 import '../styles/match-era.css'
 
@@ -32,6 +33,7 @@ export default function OnboardingPage() {
   const selectedTheme = generationThemes[selectedEra]
   const [fullName, setFullName] = useState(user?.full_name ?? '')
   const [dob, setDob] = useState(profile?.date_of_birth ?? '')
+  const [dobError, setDobError] = useState('')
   const [gender, setGender] = useState<DatingGender>(profile?.gender ?? 'prefer_not_to_say')
   const [targetGender, setTargetGender] = useState(profile?.target_gender_preference ?? draft.target ?? 'any')
   const [city, setCity] = useState(profile?.city ?? '')
@@ -50,6 +52,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!profile) return
     setDob(profile.date_of_birth ?? '')
+    setDobError('')
     setGender(profile.gender)
     setTargetGender(profile.target_gender_preference ?? 'any')
     setCity(profile.city)
@@ -68,6 +71,7 @@ export default function OnboardingPage() {
 
   function next(to: string) {
     setError('')
+    setDobError('')
     navigate(`/onboarding/${to}`)
   }
 
@@ -75,9 +79,19 @@ export default function OnboardingPage() {
     event.preventDefault()
     setError('')
     setSuccess('')
+    setDobError('')
+
     if (fullName.trim().length < 2) return setError('Enter a name with at least 2 characters.')
-    if (!dob || !city.trim()) return setError('Date of birth and location are required.')
-    if (new Date(dob).getTime() > Date.now()) return setError('Date of birth must be in the past.')
+    if (!dob) {
+      setDobError('Please enter a valid date of birth.')
+      return setError('Please enter a valid date of birth.')
+    }
+    const dobCheck = validateDateOfBirth(dob)
+    if (!dobCheck.valid) {
+      setDobError(dobCheck.error!)
+      return setError(dobCheck.error!)
+    }
+    if (!city.trim()) return setError('Location is required.')
     if (bio.length > 500) return setError('Bio must be 500 characters or fewer.')
     setBusy(true)
     try {
@@ -98,7 +112,24 @@ export default function OnboardingPage() {
       setSuccess('Your profile details are saved. Continue to identity verification.')
       navigate('/verification', { replace: true })
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Could not save your profile. Check your connection and try again.')
+      if (cause instanceof ApiError && cause.status === 422) {
+        const { fieldErrors, generalMessage } = mapApiValidationErrors(cause.payload)
+        if (fieldErrors.date_of_birth) {
+          setDobError(fieldErrors.date_of_birth)
+        }
+        setError(fieldErrors.date_of_birth || generalMessage || 'Please check your information and try again.')
+      } else if (cause instanceof ApiError) {
+        const msg = cause.message
+        if (/failed \(422\)|HTTP 422|Unprocessable/i.test(msg)) {
+          const { fieldErrors, generalMessage } = mapApiValidationErrors(cause.payload)
+          if (fieldErrors.date_of_birth) setDobError(fieldErrors.date_of_birth)
+          setError(fieldErrors.date_of_birth || generalMessage || 'Please check your information and try again.')
+        } else {
+          setError(msg)
+        }
+      } else {
+        setError('Could not save your profile. Check your connection and try again.')
+      }
     } finally { setBusy(false) }
   }
 
@@ -108,6 +139,8 @@ export default function OnboardingPage() {
   if (!profile && step !== 'era' && !draft.era) return <Navigate to="/onboarding/era" replace />
   if (!profile && step === 'preferences' && !draft.vibe) return <Navigate to="/onboarding/situationship" replace />
   if (!profile && step === 'profile' && !draft.matchEra) return <Navigate to="/onboarding/preferences" replace />
+
+  const isDobValid = Boolean(dob) && validateDateOfBirth(dob).valid
 
   return <main className="onboarding-flow" data-theme={selectedEra}>
     <div className="onboarding-flow-glow" />
@@ -178,7 +211,69 @@ export default function OnboardingPage() {
         <h1>Complete your profile ✨</h1><p className="onboarding-flow-sub">A few details help us show you eligible people.</p>
         <form className="onboarding-profile-form" onSubmit={saveProfile}>
           <label>Display name<input required minLength={2} maxLength={80} value={fullName} onChange={e => setFullName(e.currentTarget.value)} autoComplete="name" /></label>
-          <label>Date of birth<input required type="date" max={new Date().toISOString().slice(0,10)} value={dob} onChange={e => setDob(e.currentTarget.value)} /></label>
+          <label>
+            Date of birth
+            <input
+              required
+              type="date"
+              max={getMaxSelectableDob()}
+              value={dob}
+              onClick={e => {
+                e.stopPropagation()
+                try {
+                  e.currentTarget.showPicker?.()
+                } catch {
+                  // Fallback if browser already opened picker or does not support showPicker
+                }
+              }}
+              onChange={e => {
+                const val = e.currentTarget.value
+                setDob(val)
+                if (!val) {
+                  setDobError('')
+                  if (error === dobError) setError('')
+                  return
+                }
+                const check = validateDateOfBirth(val)
+                if (!check.valid) {
+                  setDobError(check.error!)
+                  setError(check.error!)
+                } else {
+                  setDobError('')
+                  if (
+                    error === dobError ||
+                    error === 'Please enter a valid date of birth.' ||
+                    error === 'You must be at least 18 years old to use Raahi.' ||
+                    error === 'Date of birth cannot be in the future.'
+                  ) {
+                    setError('')
+                  }
+                }
+              }}
+              onBlur={() => {
+                if (dob) {
+                  const check = validateDateOfBirth(dob)
+                  if (!check.valid) {
+                    setDobError(check.error!)
+                  } else {
+                    setDobError('')
+                  }
+                }
+              }}
+              aria-invalid={Boolean(dobError)}
+              aria-describedby={dobError ? 'onboarding-dob-error' : undefined}
+            />
+            {dobError && (
+              <span
+                id="onboarding-dob-error"
+                className="onboarding-field-error"
+                role="alert"
+                onClick={e => e.stopPropagation()}
+              >
+                {dobError}
+              </span>
+            )}
+          </label>
           <label>Gender<select required value={gender} onChange={e => setGender(e.currentTarget.value as DatingGender)}><option value="prefer_not_to_say">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option><option value="nonbinary">Non-binary</option><option value="other">Other</option></select></label>
           <label>City<input required maxLength={60} value={city} onChange={e => setCity(e.currentTarget.value)} autoComplete="address-level2" /></label>
           <label>Bio<textarea maxLength={500} value={bio} onChange={e => setBio(e.currentTarget.value)} rows={3} /></label>
@@ -188,7 +283,7 @@ export default function OnboardingPage() {
           {photoProgress > 0 && <p role="status">Photo upload: {photoProgress}%</p>}
           <p className="onboarding-flow-privacy">Photos are saved to your profile and displayed to matches. You can customize your full interests, profession, and education on your Profile page.</p>
           {error && <p className="onboarding-flow-error" role="alert">{error}</p>}{success && <p role="status">{success}</p>}
-          <div className="onboarding-flow-actions"><button type="button" className="onboarding-flow-secondary" onClick={() => next('preferences')}>← Back</button><button className="onboarding-flow-primary" disabled={busy}>{busy ? 'Saving…' : 'Save & continue'}</button></div>
+          <div className="onboarding-flow-actions"><button type="button" className="onboarding-flow-secondary" onClick={() => next('preferences')}>← Back</button><button className="onboarding-flow-primary" disabled={busy || !isDobValid}>{busy ? 'Saving…' : 'Save & continue'}</button></div>
         </form>
       </>}
     </section>

@@ -25,7 +25,7 @@ test('authenticated JSON requests attach the stored bearer token', async () => {
     const response = await apiRequest<{ chat_id: number }[]>('/chats')
     assert.equal(response[0].chat_id, 3)
     assert.equal(new Headers(observed?.headers).get('authorization'), 'Bearer synthetic-jwt')
-    assert.equal(observed?.url, 'http://127.0.0.1:8000/chats')
+    assert.equal(observed?.url, 'http://127.0.0.1:5257/chats')
   } finally {
     globalThis.fetch = originalFetch
     clearAuthToken()
@@ -41,7 +41,7 @@ test('URL encoded login bodies retain form encoding instead of JSON encoding', a
   }
   try {
     await apiRequest('/login', { method: 'POST', body: new URLSearchParams({ username: 'user@example.test', password: 'synthetic' }) })
-    assert.equal(observed?.url, 'http://127.0.0.1:8000/login')
+    assert.equal(observed?.url, 'http://127.0.0.1:5257/login')
     assert.equal(new URL(observed?.url ?? '').pathname, '/login')
     assert.equal(observed?.method, 'POST')
     assert.match(observed?.headers.get('content-type') ?? '', /^application\/x-www-form-urlencoded/)
@@ -117,10 +117,10 @@ test('chat API wrappers use the existing backend paths and request schemas', asy
     await deleteMessage(19)
     assert.equal(new URL(seen[0].url).pathname, '/api/v1/matches')
     assert.equal(new URL(seen[1].url).pathname, '/chats')
-    assert.equal(seen[2].url, 'http://127.0.0.1:8000/messages/4?limit=200&before_id=89')
-    assert.equal(seen[3].url, 'http://127.0.0.1:8000/messages')
+    assert.equal(seen[2].url, 'http://127.0.0.1:5257/messages/4?limit=200&before_id=89')
+    assert.equal(seen[3].url, 'http://127.0.0.1:5257/messages')
     assert.deepEqual(await seen[3].clone().json(), { chat_id: 4, content: 'Hi there.', reply_to_id: null })
-    assert.equal(seen[4].url, 'http://127.0.0.1:8000/messages/19?for_everyone=true')
+    assert.equal(seen[4].url, 'http://127.0.0.1:5257/messages/19?for_everyone=true')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -130,8 +130,8 @@ test('resolveMediaUrl correctly formats backend relative paths, preserving exter
   assert.equal(resolveMediaUrl(''), '')
   assert.equal(resolveMediaUrl(null), '')
   assert.equal(resolveMediaUrl(undefined), '')
-  assert.equal(resolveMediaUrl('/uploads/profiles/profile_123.jpg'), 'http://127.0.0.1:8000/uploads/profiles/profile_123.jpg')
-  assert.equal(resolveMediaUrl('uploads/profiles/profile_123.jpg'), 'http://127.0.0.1:8000/uploads/profiles/profile_123.jpg')
+  assert.equal(resolveMediaUrl('/uploads/profiles/profile_123.jpg'), 'http://127.0.0.1:5257/uploads/profiles/profile_123.jpg')
+  assert.equal(resolveMediaUrl('uploads/profiles/profile_123.jpg'), 'http://127.0.0.1:5257/uploads/profiles/profile_123.jpg')
   assert.equal(resolveMediaUrl('https://example.com/photo.jpg'), 'https://example.com/photo.jpg')
   assert.equal(resolveMediaUrl('http://example.com/photo.jpg'), 'http://example.com/photo.jpg')
   assert.equal(resolveMediaUrl('data:image/png;base64,abc'), 'data:image/png;base64,abc')

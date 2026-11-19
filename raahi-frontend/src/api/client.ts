@@ -11,7 +11,7 @@ type ClientImportMeta = ImportMeta & {
 const clientEnv = (import.meta as ClientImportMeta).env
 const configuredApiBaseUrl = clientEnv?.VITE_API_BASE_URL?.trim()
 const developmentApiBaseUrl = clientEnv?.DEV === true || clientEnv?.PROD !== true
-  ? 'http://127.0.0.1:8000'
+  ? 'http://127.0.0.1:5257'
   : ''
 const API_BASE_URL = (configuredApiBaseUrl || developmentApiBaseUrl).replace(/\/$/, '')
 
@@ -98,7 +98,19 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     response = await fetch(apiUrl(path), { ...init, headers })
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new ApiError(0, 'Raahi could not reach its backend. Check that the backend is running and the configured API address is correct.', null)
+      const targetUrl = apiUrl(path)
+      let destination: string
+      try {
+        const parsed = new URL(targetUrl)
+        destination = `${parsed.protocol}//${parsed.host}${parsed.pathname}`
+      } catch {
+        destination = API_BASE_URL || 'configured address'
+      }
+      throw new ApiError(
+        0,
+        `Raahi could not reach its backend at ${destination}. Check that the backend is running on ${API_BASE_URL || 'the configured address'} and your connection is working.`,
+        null
+      )
     }
     throw error
   }
@@ -115,7 +127,25 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       ? detail
       : detail && typeof detail === 'object' && 'message' in detail
         ? String((detail as { message: unknown }).message)
-        : `Request failed (${response.status})`
+        : Array.isArray(detail) && detail.length > 0
+          ? detail
+              .map(item => {
+                if (typeof item === 'string') return item
+                if (item && typeof item === 'object') {
+                  const msg = 'msg' in item && typeof item.msg === 'string'
+                    ? item.msg
+                    : 'message' in item && typeof item.message === 'string'
+                      ? item.message
+                      : ''
+                  return msg.replace(/^Value error,\s*/i, '')
+                }
+                return ''
+              })
+              .filter(Boolean)
+              .join('. ') || (response.status === 422 ? 'Validation failed. Please check the entered information.' : `Request failed (${response.status})`)
+          : response.status === 422
+            ? 'Validation failed. Please check the entered information.'
+            : `Request failed (${response.status})`
     throw new ApiError(response.status, message, payload)
   }
   return payload as T
