@@ -184,3 +184,14 @@ test('Exact 18th birthday boundary validation', () => {
   assert.equal(turnsTomorrow.valid, false)
   assert.equal(turnsTomorrow.error, 'You must be at least 18 years old to use Raahi.')
 })
+
+test('DOB input CSS prevents overflow on mobile with box-sizing border-box and max-width 100%', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const css = fs.readFileSync(path.resolve('src/styles/onboarding-flow.css'), 'utf-8')
+  const dobRuleMatch = css.match(/\.onboarding-profile-form input\[type="date"\]\s*\{([^}]+)\}/)
+  assert.ok(dobRuleMatch, 'DOB rule must exist in onboarding-flow.css')
+  const ruleBody = dobRuleMatch[1]
+  assert.match(ruleBody, /box-sizing:\s*border-box/, 'DOB input must explicitly set box-sizing: border-box')
+  assert.match(ruleBody, /max-width:\s*100%/, 'DOB input must explicitly set max-width: 100%')
+})

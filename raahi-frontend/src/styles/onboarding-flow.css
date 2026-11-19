@@ -306,6 +306,8 @@
    icon and placeholder segments (mm/dd/yyyy) in system-light colours,
    making them invisible on the near-black form background.            */
 .onboarding-profile-form input[type="date"] {
+  box-sizing: border-box;
+  max-width: 100%;
   color-scheme: dark;
   cursor: pointer;
 }
