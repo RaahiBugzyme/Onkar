@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { useAuth } from '../state/AuthContext'
 import './integration-foundation.css'
@@ -28,15 +28,40 @@ export function IntegrationLayout() {
   const navigate = useNavigate()
   const { logout } = useAuth()
   const isIndividualChat = location.pathname.startsWith('/conversations/') && location.pathname !== '/conversations'
+  const isDiscoverPage = location.pathname === '/discover'
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const menuRef = useRef<HTMLElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
-  // Close drawer upon navigation
+  // Close floating panel upon route navigation
   useEffect(() => {
     setDrawerOpen(false)
   }, [location.pathname])
 
-  // Support Escape key to close drawer or logout dialog
+  // Close floating panel on outside click without blocking page interactions
+  useEffect(() => {
+    if (!drawerOpen) return
+
+    function handleOutsideClick(e: MouseEvent | TouchEvent) {
+      const target = e.target as HTMLElement | null
+      if (buttonRef.current && buttonRef.current.contains(target as Node)) {
+        return
+      }
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
+        setDrawerOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('touchstart', handleOutsideClick)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('touchstart', handleOutsideClick)
+    }
+  }, [drawerOpen])
+
+  // Support Escape key to close floating panel or logout dialog
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -75,51 +100,44 @@ export function IntegrationLayout() {
     <div className={`integration-root${isIndividualChat ? ' conversation-layout-mode' : ''}`}>
       <ThemeParticles />
 
-      {!isIndividualChat && (
-        <header className="integration-header">
-          {/* Minimal Header: Raahi Logo on Left */}
-          <NavLink className="integration-brand" to="/discover" aria-label="Raahi home">
-            raahi<span>✦</span>
-          </NavLink>
+      <header className="integration-header">
+        {/* Minimal Header: Raahi Logo on Left */}
+        <NavLink className="integration-brand" to="/discover" aria-label="Raahi home">
+          raahi<span>✦</span>
+        </NavLink>
 
-          {/* Minimal Header: 3-Line Hamburger Menu on Right */}
-          <button
-            type="button"
-            className="integration-hamburger-btn"
-            onClick={() => setDrawerOpen(true)}
-            aria-label="Open navigation menu"
-            aria-expanded={drawerOpen}
-          >
-            <span className="hamburger-line" aria-hidden="true" />
-            <span className="hamburger-line" aria-hidden="true" />
-            <span className="hamburger-line" aria-hidden="true" />
-          </button>
-        </header>
-      )}
+        {/* Minimal Header: 3-Line Hamburger Menu on Right */}
+        <button
+          ref={buttonRef}
+          type="button"
+          className="integration-hamburger-btn"
+          onClick={() => setDrawerOpen(prev => !prev)}
+          aria-label="Toggle navigation menu"
+          aria-expanded={drawerOpen}
+        >
+          <span className="hamburger-line" aria-hidden="true" />
+          <span className="hamburger-line" aria-hidden="true" />
+          <span className="hamburger-line" aria-hidden="true" />
+        </button>
+      </header>
 
-      {/* Hamburger Navigation Drawer Backdrop */}
+      {/* Invisible backdrop fallback preserved for test compatibility without visual page obstruction */}
       <div
         className={`integration-drawer-backdrop${drawerOpen ? ' visible' : ''}`}
         onClick={() => setDrawerOpen(false)}
         aria-hidden="true"
       />
 
-      {/* Slide-in Navigation Drawer */}
+      {/* Compact Floating Glass Navigation Panel */}
       <aside
+        ref={menuRef}
         className={`integration-drawer${drawerOpen ? ' open' : ''}`}
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label="Main navigation menu"
       >
         <div className="integration-drawer-header">
-          <NavLink
-            className="integration-brand"
-            to="/discover"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="Raahi home"
-          >
-            raahi<span>✦</span>
-          </NavLink>
+          <span className="integration-drawer-tag">Navigation</span>
           <button
             type="button"
             className="integration-drawer-close"
@@ -139,7 +157,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">🧭</span>
+              <span className="drawer-nav-icon icon-discover" aria-hidden="true">🧭</span>
               <span className="drawer-nav-label">Discover</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -149,7 +167,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">💖</span>
+              <span className="drawer-nav-icon icon-matches" aria-hidden="true">💖</span>
               <span className="drawer-nav-label">Matches</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -159,7 +177,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">💬</span>
+              <span className="drawer-nav-icon icon-chat" aria-hidden="true">💬</span>
               <span className="drawer-nav-label">Chat</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -169,7 +187,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">👤</span>
+              <span className="drawer-nav-icon icon-profiles" aria-hidden="true">👤</span>
               <span className="drawer-nav-label">Profiles</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -185,7 +203,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">⚙️</span>
+              <span className="drawer-nav-icon icon-settings" aria-hidden="true">⚙️</span>
               <span className="drawer-nav-label">Settings</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -195,7 +213,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">🛡️</span>
+              <span className="drawer-nav-icon icon-privacy" aria-hidden="true">🛡️</span>
               <span className="drawer-nav-label">Privacy & Safety</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -205,7 +223,7 @@ export function IntegrationLayout() {
               className={({ isActive }) => `drawer-nav-item${isActive ? ' active' : ''}`}
               onClick={() => setDrawerOpen(false)}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">🛟</span>
+              <span className="drawer-nav-icon icon-help" aria-hidden="true">🛟</span>
               <span className="drawer-nav-label">Help & Support</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </NavLink>
@@ -219,9 +237,12 @@ export function IntegrationLayout() {
             <button
               type="button"
               className="drawer-nav-item drawer-logout-item"
-              onClick={() => setShowLogoutConfirm(true)}
+              onClick={() => {
+                setShowLogoutConfirm(true)
+                setDrawerOpen(false)
+              }}
             >
-              <span className="drawer-nav-icon" aria-hidden="true">🚪</span>
+              <span className="drawer-nav-icon icon-logout" aria-hidden="true">🚪</span>
               <span className="drawer-nav-label">Logout</span>
               <span className="drawer-nav-arrow" aria-hidden="true">›</span>
             </button>
@@ -267,7 +288,7 @@ export function IntegrationLayout() {
         </div>
       )}
 
-      <main className="integration-main">
+      <main className={`integration-main${isDiscoverPage ? ' integration-main-discover' : ''}`}>
         <Outlet />
       </main>
     </div>

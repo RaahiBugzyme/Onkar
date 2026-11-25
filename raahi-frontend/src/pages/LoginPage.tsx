@@ -14,6 +14,10 @@ import { ApiError } from '../api/client'
 
 const googleGIcon = new URL('../assets/google-g.svg', import.meta.url).href
 
+// Module-level deduplication cache to prevent duplicate token exchanges
+// across React StrictMode dual-mounts, component re-renders, and rapid clicks.
+const inFlightGoogleExchanges = new Map<string, Promise<{ access_token: string; token_type: string }>>()
+
 export function LoginPage() {
   const { user, loading, logout, loginWithToken } = useAuth()
   const { refreshProfile } = useDatingProfile()
@@ -39,13 +43,30 @@ export function LoginPage() {
     const state = searchParams.get('state')
     if (!code || !state || user) return
 
+    const exchangeKey = `${code}:${state}`
     let active = true
     setGoogleLoading(true)
     setGoogleError('')
 
     void (async () => {
       try {
-        const result = await loginWithGoogleCallback({ code, state })
+        let exchangePromise = inFlightGoogleExchanges.get(exchangeKey)
+        if (!exchangePromise) {
+          exchangePromise = loginWithGoogleCallback({ code, state })
+          inFlightGoogleExchanges.set(exchangeKey, exchangePromise)
+        }
+
+        const result = await exchangePromise
+
+        // Clean up URL query parameters to avoid duplicate executions on refresh
+        try {
+          const next = searchParams.get('next')
+          const cleanUrl = window.location.pathname + (next ? `?next=${encodeURIComponent(next)}` : '')
+          window.history.replaceState({}, '', cleanUrl)
+        } catch {
+          // ignore in non-browser testing
+        }
+
         if (!active) return
         await loginWithToken(result.access_token)
         const destination = await resolveDestination()
@@ -54,6 +75,7 @@ export function LoginPage() {
           navigate(destination, { replace: true })
         }
       } catch (cause) {
+        inFlightGoogleExchanges.delete(exchangeKey)
         if (active) {
           setGoogleError(cause instanceof ApiError ? cause.message : 'Google sign-in failed. Please try again or use email.')
         }
@@ -182,10 +204,10 @@ export function LoginPage() {
           />
         )}
 
-        <div style={{ margin: '14px 0 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,.12)' }} />
-          <span style={{ fontSize: '.72rem', color: 'rgba(255,255,255,.45)', textTransform: 'uppercase', letterSpacing: '.1em' }}>or</span>
-          <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,.12)' }} />
+        <div className="login-divider">
+          <div className="login-divider-line" />
+          <span className="login-divider-text">or</span>
+          <div className="login-divider-line" />
         </div>
 
         <button

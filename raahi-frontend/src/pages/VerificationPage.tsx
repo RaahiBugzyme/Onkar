@@ -57,15 +57,70 @@ export default function VerificationPage() {
   if (!user) return <Navigate to="/login?next=%2Fverification" replace />
   if (profileError) return <main className="onboarding-flow verification-v3-screen"><section className="verification-v3-content"><p className="step-label">Verification Required</p><h1 className="stitle">We couldn’t load your profile.</h1><p className="ssub" role="alert">{profileError}</p><button className="btn-cta" onClick={() => void refreshProfile().catch(() => undefined)}>Retry profile check</button></section></main>
   if (!profile) return <Navigate to="/onboarding/era" replace />
-  if (isVerificationApproved(profile, status)) return <Navigate to="/discover" replace />
 
   const faceRecord = status?.verifications.find(record => record.verification_type === 'face')
   const idRecords = status?.verifications.filter(record => record.verification_type.startsWith('id_')) ?? []
   const idRecord = idRecords.find(record => record.verification_type === idType) ?? idRecords[0]
-  const faceApproved = status?.is_face_verified === true && profile.is_face_verified
-  const idApproved = status?.is_id_verified === true && profile.is_id_verified
+  const faceApproved = (status?.is_face_verified === true || profile.is_face_verified)
+  const idApproved = (status?.is_id_verified === true || profile.is_id_verified)
   const approvedCount = Number(faceApproved) + Number(idApproved)
-  const canUpload = status?.verification_available === true
+  const isApproved = isVerificationApproved(profile, status) || (faceApproved && idApproved)
+  const canUpload = status?.verification_available !== false
+
+  if (isApproved) {
+    return (
+      <main className="onboarding-flow verification-v3-screen">
+        <div className="onboarding-flow-glow" />
+        <section className="verification-v3-content">
+          <div style={{ marginBottom: 16 }}>
+            <button
+              type="button"
+              className="settings-back-link"
+              onClick={() => navigate('/settings')}
+              style={{ background: 'none', border: 'none', color: '#d8b4fe', cursor: 'pointer', padding: 0 }}
+            >
+              ← Back to Settings
+            </button>
+          </div>
+          <div style={{ textAlign: 'center', margin: '20px 0 32px' }}>
+            <span style={{ fontSize: '3.5rem', display: 'inline-block', marginBottom: 12 }}>🛡️</span>
+            <h1 className="stitle fiu" style={{ color: '#4ade80' }}>Your Account is Verified</h1>
+            <p className="ssub fiu">Both your face photo and identity document have been reviewed and approved by Raahi.</p>
+          </div>
+          <div className="verify-steps">
+            <section className="vstep fiu done-step">
+              <div className="vstep-header">
+                <div className="vstep-icon"><span className="e e-float">📸</span></div>
+                <div className="vstep-title">Clear Face Photo</div>
+              </div>
+              <div className="vstep-sub">Verified through private manual review.</div>
+              <div className="vstep-body">
+                <div className="status-badge verification-record-status approved" role="status">Approved by Raahi review ✓</div>
+              </div>
+            </section>
+            <section className="vstep fiu done-step">
+              <div className="vstep-header">
+                <div className="vstep-icon"><span className="e e-swing">🪪</span></div>
+                <div className="vstep-title">ID Verification</div>
+              </div>
+              <div className="vstep-sub">Student, Work or Government ID verified.</div>
+              <div className="vstep-body">
+                <div className="status-badge verification-record-status approved" role="status">Approved by Raahi review ✓</div>
+              </div>
+            </section>
+          </div>
+          <div className="verification-v3-cta-wrap" style={{ marginTop: 28, display: 'flex', gap: 12 }}>
+            <button className="btn-cta" type="button" onClick={() => navigate('/discover')}>
+              Explore Discover <span className="btn-arrow">→</span>
+            </button>
+            <button className="verification-v3-refresh" type="button" onClick={() => navigate('/settings')}>
+              Return to Settings
+            </button>
+          </div>
+        </section>
+      </main>
+    )
+  }
 
   function acceptEvidence(file: File | null, kind: 'face' | 'id') {
     const setError = kind === 'face' ? setFaceFileError : setIdFileError
@@ -121,15 +176,33 @@ export default function VerificationPage() {
   const idReview = reviewLabel(idApproved, idRecord)
   const pendingReview = status?.current_status === 'pending' || uploadPendingReview
 
+  const hasRejection = faceRecord?.status === 'failed' || idRecord?.status === 'failed' || status?.current_status === 'rejected'
+
   return <main className="onboarding-flow verification-v3-screen">
     <div className="onboarding-flow-glow" />
-    <div className="step-row verification-v3-step-row"><span className="step-label">Verification Required</span><div className="step-dots" aria-label="Verification step"><span className="dot active" /><span className="dot" /><span className="dot" /><span className="dot" /></div></div>
+    <div className="step-row verification-v3-step-row">
+      <button
+        type="button"
+        className="settings-back-link"
+        onClick={() => navigate('/settings')}
+        style={{ background: 'none', border: 'none', color: '#d8b4fe', cursor: 'pointer', padding: '0 8px 0 0', fontSize: '0.82rem' }}
+      >
+        ← Back
+      </button>
+      <span className="step-label">Verification Required</span>
+      <div className="step-dots" aria-label="Verification step"><span className="dot active" /><span className="dot" /><span className="dot" /><span className="dot" /></div>
+    </div>
     <section className="verification-v3-content">
       <h1 className="stitle fiu">Prove you're real,<br />not AI <span className="e e-wiggle">🛡️</span></h1>
       <p className="ssub fiu">Raahi only allows verified humans. <span className="e e-shake verification-inline-emoji">No catfishing</span>, no bots.</p>
       <div className="verify-progress fiu" role="progressbar" aria-label="Approved verification checks" aria-valuemin={0} aria-valuemax={2} aria-valuenow={approvedCount}><div className="verify-progress-fill" style={{ width: `${approvedCount * 50}%` }} /></div>
       {statusError && <div className="verification-api-error" role="alert"><span>{statusError}</span><button type="button" onClick={() => void reloadStatus()}>Retry status</button></div>}
       {status?.verification_available === false && <div className="verification-config-notice" role="status"><strong>Uploads are unavailable right now.</strong><span>The verification service reports that secure evidence storage or authorized reviewer configuration is incomplete. Your files have not been submitted.</span></div>}
+      {hasRejection && (
+        <div className="verification-api-error" role="alert" style={{ background: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.4)', padding: 12, borderRadius: 12, color: '#fca5a5', margin: '12px 0' }}>
+          <strong>⚠️ Action Required:</strong> Previous verification was not approved. Please upload clear, unedited evidence below to retry.
+        </div>
+      )}
       {pendingReview && <p className="verification-overall-pending" role="status">Your evidence is pending manual review. Uploading a file does not verify your account.</p>}
       {uploadError && <p className="verification-api-error" role="alert">{uploadError}</p>}
       <div className="verify-steps">

@@ -129,6 +129,12 @@ export function RegisterPage() {
     setBusy(true)
     try {
       await registerAccount({ username: cleanedUsername, email: email.trim(), password })
+      try {
+        globalThis.localStorage?.removeItem('raahiDemoUserProfile.v1')
+        globalThis.sessionStorage?.removeItem('raahi.onboardingDraft.v2')
+      } catch {
+        // ignore storage unavailable
+      }
       await login(email.trim(), password)
       setProfile(null)
       try { await updateUser({ full_name: cleanedName }) } catch { /* Profile setup can still retry the name after account creation. */ }

@@ -34,3 +34,19 @@ def test_unsafe_test_database_urls_are_refused(test_url, application_url):
 def test_test_database_name_must_be_explicit():
     with pytest.raises(ValueError, match="start with 'test_' or end with '_test'"):
         validate_test_database_url("postgresql://user:secret@localhost/raahi_dev")
+
+
+def test_enforce_test_environment_blocks_dev_or_prod(monkeypatch):
+    from app.db_safety import enforce_test_environment
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@localhost:5432/raahi")
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql://user:secret@localhost:5432/raahi")
+    with pytest.raises(RuntimeError, match="Database safety guard rejected test execution"):
+        enforce_test_environment()
+
+
+def test_enforce_test_environment_requires_test_url(monkeypatch):
+    from app.db_safety import enforce_test_environment
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@localhost:5432/raahi")
+    monkeypatch.setenv("TEST_DATABASE_URL", "")
+    with pytest.raises(RuntimeError, match="Database safety guard rejected test execution"):
+        enforce_test_environment()

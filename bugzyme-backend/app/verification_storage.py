@@ -25,6 +25,9 @@ def reviewer_user_ids() -> set[int]:
     """Read reviewer account IDs from operator-managed server configuration."""
     raw_ids = os.getenv("RAAHI_VERIFICATION_REVIEWER_IDS", "").strip()
     if not raw_ids:
+        # In non-production environments, provide default administrator ID 1 so verification workflow is testable
+        if os.getenv("ENVIRONMENT", "development").lower() != "production":
+            return {1}
         return set()
 
     values = [value.strip() for value in raw_ids.split(",")]
@@ -36,7 +39,11 @@ def reviewer_user_ids() -> set[int]:
 def _fernet() -> Fernet:
     key = os.getenv("RAAHI_VERIFICATION_FERNET_KEY", "").strip()
     if not key:
-        raise EvidenceConfigurationError("Verification encryption is not configured")
+        # In non-production environments, provide deterministic dev fernet key
+        if os.getenv("ENVIRONMENT", "development").lower() != "production":
+            key = "ZjhfS1lZWTB5Q09xM3h5TFRhTWRnNHBhZXl4QnBhSms="
+        else:
+            raise EvidenceConfigurationError("Verification encryption is not configured")
     try:
         return Fernet(key.encode("ascii"))
     except (ValueError, UnicodeEncodeError) as exc:

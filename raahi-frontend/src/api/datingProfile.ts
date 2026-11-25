@@ -83,3 +83,14 @@ export async function getMyProfilePhotos(): Promise<ProfilePhoto[]> {
 export function deleteProfilePhoto(photoId: number) {
   return apiRequest<{ deleted: boolean }>(`/api/v1/profile/photos/${photoId}`, { method: 'DELETE' })
 }
+
+export function setPrimaryProfilePhoto(photoId: number) {
+  return apiRequest<ProfilePhoto>(`/api/v1/profile/photos/${photoId}/primary`, { method: 'PUT' })
+}
+
+export function reorderProfilePhotos(photoIds: number[]) {
+  return apiRequest<ProfilePhoto[]>('/api/v1/profile/photos/reorder', {
+    method: 'PUT',
+    body: JSON.stringify({ photo_ids: photoIds }),
+  })
+}

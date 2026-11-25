@@ -7,6 +7,7 @@ import { useDatingProfile } from '../state/DatingProfileContext'
 import { useTheme } from '../state/ThemeContext'
 import { generationThemes, type GenerationId } from '../data/generations'
 import { validateDateOfBirth, mapApiValidationErrors, getMaxSelectableDob } from '../utils/dobValidation'
+import { requestCurrentLocation } from '../utils/geolocation'
 import '../styles/onboarding-flow.css'
 import '../styles/match-era.css'
 
@@ -37,9 +38,12 @@ export default function OnboardingPage() {
   const [gender, setGender] = useState<DatingGender>(profile?.gender ?? 'prefer_not_to_say')
   const [targetGender, setTargetGender] = useState(profile?.target_gender_preference ?? draft.target ?? 'any')
   const [city, setCity] = useState(profile?.city ?? '')
+  const [detectingLocation, setDetectingLocation] = useState(false)
+  const [locationMessage, setLocationMessage] = useState('')
   const [bio, setBio] = useState(user?.bio ?? '')
   const [matchEra, setMatchEra] = useState(profile?.match_era_preference ?? 'any')
   const [photos, setPhotos] = useState<File[]>([])
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([])
   const [photoProgress, setPhotoProgress] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -275,11 +279,87 @@ export default function OnboardingPage() {
             )}
           </label>
           <label>Gender<select required value={gender} onChange={e => setGender(e.currentTarget.value as DatingGender)}><option value="prefer_not_to_say">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option><option value="nonbinary">Non-binary</option><option value="other">Other</option></select></label>
-          <label>City<input required maxLength={60} value={city} onChange={e => setCity(e.currentTarget.value)} autoComplete="address-level2" /></label>
+          <label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>City</span>
+              <button
+                type="button"
+                className="onboarding-location-btn"
+                onClick={async () => {
+                  setDetectingLocation(true)
+                  setLocationMessage('')
+                  const res = await requestCurrentLocation()
+                  setDetectingLocation(false)
+                  if (res.city) {
+                    setCity(res.city)
+                    setLocationMessage(`📍 Detected ${res.city}`)
+                  } else if (res.error) {
+                    setLocationMessage(res.error)
+                  }
+                }}
+                disabled={detectingLocation}
+                style={{
+                  background: 'rgba(168,85,247,0.18)',
+                  border: '1px solid rgba(168,85,247,0.35)',
+                  color: '#f3e8ff',
+                  fontSize: '0.75rem',
+                  padding: '3px 8px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                {detectingLocation ? 'Detecting…' : '📍 Use current location'}
+              </button>
+            </div>
+            <input
+              required
+              maxLength={60}
+              value={city}
+              onChange={e => setCity(e.currentTarget.value)}
+              autoComplete="address-level2"
+              placeholder="e.g. Mumbai, Bengaluru"
+            />
+            <small style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', marginTop: 2, display: 'block' }}>
+              Used to show matches nearby. Your exact GPS coordinates are never shared.
+            </small>
+            {locationMessage && (
+              <small style={{ fontSize: '0.74rem', color: locationMessage.startsWith('📍') ? '#4ade80' : '#fca5a5', marginTop: 2, display: 'block' }}>
+                {locationMessage}
+              </small>
+            )}
+          </label>
           <label>Bio<textarea maxLength={500} value={bio} onChange={e => setBio(e.currentTarget.value)} rows={3} /></label>
           <label>Who would you like to discover?<select value={targetGender} onChange={e => setTargetGender(e.currentTarget.value)}><option value="any">Everyone</option><option value="female">Women</option><option value="male">Men</option><option value="nonbinary">Non-binary people</option><option value="other">Other genders</option></select></label>
           <label>Preferred match era<select value={draft.matchEra ?? matchEra} onChange={e => updateDraft({ matchEra: e.currentTarget.value })}><option value="any">Open to any era</option><option value="genz">Gen Z</option><option value="zillenial">Zillenial</option><option value="millennial">Millennial</option></select></label>
-          <label>Profile photos<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={e => setPhotos(Array.from(e.currentTarget.files ?? []))} /></label>
+          <label>Profile photos
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              onChange={e => {
+                const selected = Array.from(e.currentTarget.files ?? [])
+                if (!selected.length) return
+                const valid = selected.filter(f => f.type.startsWith('image/') && f.size <= 10 * 1024 * 1024)
+                if (valid.length !== selected.length) {
+                  setError('Each photo must be a valid image under 10MB.')
+                } else {
+                  setError('')
+                }
+                setPhotos(valid)
+                setPhotoPreviews(valid.map(f => URL.createObjectURL(f)))
+              }}
+            />
+          </label>
+          {photoPreviews.length > 0 && (
+            <div className="onboarding-photo-previews" style={{ display: 'flex', gap: 8, margin: '8px 0', flexWrap: 'wrap' }}>
+              {photoPreviews.map((preview, i) => (
+                <div key={i} style={{ width: 64, height: 64, borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.2)', position: 'relative' }}>
+                  <img src={preview} alt={`Selected ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  {i === 0 && <span style={{ position: 'absolute', bottom: 2, left: 2, background: 'rgba(0,0,0,0.7)', fontSize: '0.55rem', padding: '1px 4px', borderRadius: 4, color: '#d8b4fe' }}>Primary ⭐</span>}
+                </div>
+              ))}
+            </div>
+          )}
           {photoProgress > 0 && <p role="status">Photo upload: {photoProgress}%</p>}
           <p className="onboarding-flow-privacy">Photos are saved to your profile and displayed to matches. You can customize your full interests, profession, and education on your Profile page.</p>
           {error && <p className="onboarding-flow-error" role="alert">{error}</p>}{success && <p role="status">{success}</p>}

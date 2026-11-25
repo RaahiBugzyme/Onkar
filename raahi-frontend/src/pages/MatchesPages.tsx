@@ -1,25 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { AccountAccess } from '../components/AccountAccess'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
 import { ApiError, fetchProtectedBlob, getAuthToken, resolveMediaUrl } from '../api/client'
-import { isDemoModeEnabled } from '../utils/demoEnvironment'
 import { mergeChatMessage, reduceChatMessages } from '../api/chatState'
+import { BlockConfirmationModal, ReportUserModal, SafetyMenuDropdown } from '../components/SafetyModals'
 import {
   chatSocketUrl, deleteConversation, deleteMessage, fetchChats, fetchCoach, fetchInsights,
   fetchMatch, fetchMatches, fetchMessages, fetchSuggestions, sendTextMessage,
   trackSuggestionEvent, uploadAttachment, uploadVoice,
   type ChatMessage, type ChatSummary, type IncomingMessageEvent, type MatchDetail, type MatchItem,
 } from '../api/chat'
-import { useAuth } from '../state/AuthContext'
+import { useAuth, type CurrentUser } from '../state/AuthContext'
+import { useDatingProfile } from '../state/DatingProfileContext'
+import type { ProfilePhoto } from '../api/datingProfile'
 import { useTheme } from '../state/ThemeContext'
-import {
-  getDemoProfile, getDemoMessages, appendDemoMessage, addDemoReaction,
-  isDemoChat, getDemoConversationProfiles, type DemoProfile
-} from '../data/demoChatData'
-import { getDemoMatches, getDemoCandidateById, type DemoCandidate } from '../data/demoAppData'
 import '../styles/matches.css'
 
 function apiErrorMessage(error: unknown, fallback: string) {
@@ -37,11 +34,149 @@ function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? '').join('') || 'R'
 }
 
+export function getPrimaryPhotoUrl(photos?: ProfilePhoto[] | null): string | null {
+  if (!photos || photos.length === 0) return null
+  const primary = photos.find(p => p.is_primary)
+  return (primary ?? photos[0])?.photo_url || null
+}
+
 function Avatar({ name, photo, small = false }: { name: string; photo?: string | null; small?: boolean }) {
-  if (photo) {
-    return <img src={resolveMediaUrl(photo)} alt={name} className={`matches-avatar${small ? ' small' : ''}`} style={{ objectFit: 'cover' }} />
+  const [imgError, setImgError] = useState(false)
+  useEffect(() => {
+    setImgError(false)
+  }, [photo])
+
+  if (photo && !imgError) {
+    return (
+      <img
+        src={resolveMediaUrl(photo)}
+        alt={name}
+        className={`matches-avatar${small ? ' small' : ''}`}
+        style={{ objectFit: 'cover' }}
+        onError={() => setImgError(true)}
+      />
+    )
   }
   return <span className={`matches-avatar${small ? ' small' : ''}`} aria-hidden="true">{initials(name)}</span>
+}
+
+function MatchAvatarImage({
+  photo,
+  name,
+  fallbackInitial,
+  className,
+}: {
+  photo?: string | null
+  name: string
+  fallbackInitial: string
+  className: string
+}) {
+  const [imgError, setImgError] = useState(false)
+  useEffect(() => {
+    setImgError(false)
+  }, [photo])
+
+  if (photo && !imgError) {
+    return (
+      <img
+        src={resolveMediaUrl(photo)}
+        alt={name}
+        className={className}
+        onError={() => setImgError(true)}
+      />
+    )
+  }
+  return (
+    <span className={className.includes('conv-row') ? 'conv-row-initial' : 'new-match-initial'}>
+      {fallbackInitial}
+    </span>
+  )
+}
+
+function MatchCelebrationModal({
+  match,
+  user,
+  userPrimaryPhoto,
+  onClose,
+}: {
+  match: { name: string; initials: string; ringColor: string; chatId: number; photo?: string }
+  user: CurrentUser | null
+  userPrimaryPhoto: string | null
+  onClose: () => void
+}) {
+  const [userPhotoFailed, setUserPhotoFailed] = useState(false)
+  const [matchPhotoFailed, setMatchPhotoFailed] = useState(false)
+
+  useEffect(() => {
+    setUserPhotoFailed(false)
+  }, [userPrimaryPhoto])
+
+  useEffect(() => {
+    setMatchPhotoFailed(false)
+  }, [match.photo])
+
+  const userInitial = user?.username ? user.username[0]?.toUpperCase() : '😎'
+
+  return (
+    <div className="discover-celebration-overlay" role="dialog" aria-modal="true" aria-label="Match celebration">
+      <div className="celebration-modal-card">
+        <p className="celebration-eyebrow">MUTUAL CONNECTION</p>
+        <h2 className="celebration-title">It’s a Match! 🎉</h2>
+        <p className="celebration-subtitle">
+          You and {match.name} connected on Raahi. Say hi and start the conversation!
+        </p>
+        <div className="celebration-clash" aria-hidden="true">
+          <div
+            className="celebration-avatar-ring"
+            style={{ borderColor: 'var(--ep)', boxShadow: '0 0 24px rgba(216,61,180,0.5)', overflow: 'hidden' }}
+          >
+            {userPrimaryPhoto && !userPhotoFailed ? (
+              <img
+                src={resolveMediaUrl(userPrimaryPhoto)}
+                alt={user?.full_name || user?.username || 'You'}
+                className="celebration-avatar-img"
+                onError={() => setUserPhotoFailed(true)}
+              />
+            ) : (
+              <span>{userInitial}</span>
+            )}
+          </div>
+          <span className="celebration-sparkle-center">💗</span>
+          <div
+            className="celebration-avatar-ring"
+            style={{ borderColor: match.ringColor, boxShadow: `0 0 24px ${match.ringColor}`, overflow: 'hidden' }}
+          >
+            {match.photo && !matchPhotoFailed ? (
+              <img
+                src={resolveMediaUrl(match.photo)}
+                alt={match.name}
+                className="celebration-avatar-img"
+                onError={() => setMatchPhotoFailed(true)}
+              />
+            ) : (
+              <span>{match.initials}</span>
+            )}
+          </div>
+        </div>
+        <div className="celebration-actions">
+          <Link
+            to={`/conversations/${match.chatId}`}
+            className="celebration-chat-btn bpulse"
+            onClick={onClose}
+          >
+            Send Message 👋
+          </Link>
+          <button
+            type="button"
+            className="celebration-keep-btn"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function AuthGate({ message = 'Sign in to see your real matches and conversations.' }: { message?: string }) {
@@ -58,6 +193,7 @@ function PageError({ message, onRetry }: { message: string; onRetry?: () => void
 
 export function MatchesPage() {
   const { user, loading: authLoading } = useAuth()
+  const { profile } = useDatingProfile()
   const { generation } = useTheme()
   const [matches, setMatches] = useState<MatchItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -67,7 +203,7 @@ export function MatchesPage() {
   const [search, setSearch] = useState('')
   const [celebratingMatch, setCelebratingMatch] = useState<{ name: string; initials: string; ringColor: string; chatId: number; photo?: string } | null>(null)
 
-  const demoMatches = useMemo(() => getDemoMatches(), [])
+  const userPrimaryPhoto = useMemo(() => getPrimaryPhotoUrl(profile?.photos), [profile?.photos])
 
   const load = useCallback(async () => {
     if (!user) return
@@ -93,17 +229,27 @@ export function MatchesPage() {
   }
 
   useEffect(() => { if (user) void load(); else setLoading(false) }, [load, user])
+  useEffect(() => {
+    const handleReload = () => { if (user) void load() }
+    window.addEventListener('raahi:user-blocked', handleReload)
+    window.addEventListener('raahi:match-ended', handleReload)
+    return () => {
+      window.removeEventListener('raahi:user-blocked', handleReload)
+      window.removeEventListener('raahi:match-ended', handleReload)
+    }
+  }, [load, user])
 
   const filteredReal = useMemo(() => matches.filter(match => `${match.matched_user.full_name ?? ''} ${match.matched_user.username ?? ''} ${match.city ?? ''}`.toLowerCase().includes(search.trim().toLowerCase())), [matches, search])
-  const filteredDemo = useMemo(() => demoMatches.filter(m => `${m.name} ${m.city} ${m.era} ${m.vibeTag}`.toLowerCase().includes(search.trim().toLowerCase())), [demoMatches, search])
 
   const eraModeLabel = generation === 'millennial' ? 'Millennial' : generation === 'zillenial' ? 'Zillenial' : 'Gen Z'
   const eraModeIcon = generation === 'millennial' ? '⚡' : generation === 'zillenial' ? '🎭' : '💀'
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
 
-  const isDemo = isDemoModeEnabled() || !user
-  const displayCount = isDemo ? filteredDemo.length : filteredReal.length
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+  const displayCount = filteredReal.length
 
   return (
     <PageContainer className="matches-page page-enter">
@@ -140,58 +286,35 @@ export function MatchesPage() {
         {/* Scrollable Matches Content Container */}
         <div className="matches-scroll-content">
           {/* NEW MATCHES Section */}
-          {((!isDemo && matches.length > 0) || isDemo) && (
+          {matches.length > 0 && (
             <section className="matches-section" aria-label="New matches">
               <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
               <div className="new-matches-scroll">
-                {isDemo ? (
-                  demoMatches.map(match => (
-                    <div
+                {matches.slice(0, 10).map(match => {
+                  const name = match.matched_user.full_name || match.matched_user.username || 'Match'
+                  const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
+                  return (
+                    <Link
                       key={match.id}
+                      to={`/conversations/${match.chat_id}`}
                       className="new-match-avatar-card"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setCelebratingMatch({ name: match.name, initials: match.initials, ringColor: match.ringColor, chatId: match.chatId, photo: match.photos?.[0] })}
-                      title={`Celebrate match with ${match.name}`}
+                      title={`Chat with ${name}`}
                     >
                       <span className="new-match-pill">NEW</span>
-                      <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
-                        {match.photos?.[0] ? (
-                          <img src={resolveMediaUrl(match.photos[0])} alt={match.name} className="new-match-avatar-img" />
-                        ) : (
-                          <span className="new-match-initial">{match.initials}</span>
-                        )}
-                        <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
+                      <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
+                        <MatchAvatarImage
+                          photo={photo}
+                          name={name}
+                          fallbackInitial={initials(name)}
+                          className="new-match-avatar-img"
+                        />
+                        <span className="new-match-corner" aria-hidden="true">💖</span>
                       </div>
-                      <span className="new-match-name">{match.name}</span>
-                      <span className="new-match-status">{match.status}</span>
-                    </div>
-                  ))
-                ) : (
-                  matches.slice(0, 10).map(match => {
-                    const name = match.matched_user.full_name || match.matched_user.username || 'Match'
-                    const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
-                    return (
-                      <Link
-                        key={match.id}
-                        to={`/conversations/${match.chat_id}`}
-                        className="new-match-avatar-card"
-                        title={`Chat with ${name}`}
-                      >
-                        <span className="new-match-pill">NEW</span>
-                        <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
-                          {photo ? (
-                            <img src={resolveMediaUrl(photo)} alt={name} className="new-match-avatar-img" />
-                          ) : (
-                            <span className="new-match-initial">{initials(name)}</span>
-                          )}
-                          <span className="new-match-corner" aria-hidden="true">💖</span>
-                        </div>
-                        <span className="new-match-name">{name}</span>
-                        <span className="new-match-status">{match.city || 'Active'}</span>
-                      </Link>
-                    )
-                  })
-                )}
+                      <span className="new-match-name">{name}</span>
+                      <span className="new-match-status">{match.city || 'Active'}</span>
+                    </Link>
+                  )
+                })}
               </div>
             </section>
           )}
@@ -203,55 +326,38 @@ export function MatchesPage() {
               <PageError message={error} onRetry={() => void load()} />
             ) : loading ? (
               <LoadingState label="Loading your matches…" />
-            ) : isDemo ? (
-              filteredDemo.length ? (
-                <div className="conversations-cards-column">
-                  {filteredDemo.map(match => (
-                    <DemoMatchCard
-                      key={match.id}
-                      candidate={match}
-                      onCelebrate={() => setCelebratingMatch({ name: match.name, initials: match.initials, ringColor: match.ringColor, chatId: match.chatId })}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
-                  <span className="matches-empty-icon" aria-hidden="true">⌕</span>
-                  <p className="integration-eyebrow">NO SEARCH RESULTS</p>
-                  <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>No matches found for “{search}”</h3>
-                  <p style={{ fontSize: '.84rem' }}>Try searching another name, city, or vibe.</p>
-                </Card>
-              )
+            ) : filteredReal.length ? (
+              <div className="conversations-cards-column">
+                {filteredReal.map(match => (
+                  <MatchCard key={match.id} match={match} />
+                ))}
+                {hasMore && !search.trim() && (
+                  <button
+                    className="matches-outline-button matches-load-more"
+                    type="button"
+                    disabled={loadingMore}
+                    onClick={() => void loadMore()}
+                  >
+                    {loadingMore ? 'Loading…' : 'Load more matches'}
+                  </button>
+                )}
+              </div>
             ) : (
-              filteredReal.length ? (
-                <div className="conversations-cards-column">
-                  {filteredReal.map(match => (
-                    <MatchCard key={match.id} match={match} />
-                  ))}
-                  {hasMore && !search.trim() && (
-                    <button
-                      className="matches-outline-button matches-load-more"
-                      type="button"
-                      disabled={loadingMore}
-                      onClick={() => void loadMore()}
-                    >
-                      {loadingMore ? 'Loading…' : 'Load more matches'}
-                    </button>
-                  )}
+              <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
+                <span className="matches-empty-icon" aria-hidden="true">☾</span>
+                <p className="integration-eyebrow">{search.trim() ? 'NO SEARCH RESULTS' : 'A LITTLE QUIET HERE'}</p>
+                <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>
+                  {search.trim() ? `No matches found for “${search}”` : 'Your next connection will show up here'}
+                </h3>
+                <p style={{ fontSize: '.84rem' }}>
+                  {search.trim() ? 'Try searching another name, city, or vibe.' : 'New mutual matches will appear here when you like each other in Discover.'}
+                </p>
+                <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
+                  <Link className="matches-primary-button" to="/discover">
+                    Start Discovering 🧭
+                  </Link>
                 </div>
-              ) : (
-                <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
-                  <span className="matches-empty-icon" aria-hidden="true">☾</span>
-                  <p className="integration-eyebrow">A LITTLE QUIET HERE</p>
-                  <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>Your next connection will show up here</h3>
-                  <p style={{ fontSize: '.84rem' }}>New mutual matches will appear here when you like each other in Discover.</p>
-                  <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
-                    <Link className="matches-primary-button" to="/discover">
-                      Start Discovering 🧭
-                    </Link>
-                  </div>
-                </Card>
-              )
+              </Card>
             )}
           </section>
         </div>
@@ -259,102 +365,14 @@ export function MatchesPage() {
 
       {/* Match Celebration Modal */}
       {celebratingMatch && (
-        <div className="discover-celebration-overlay" role="dialog" aria-modal="true" aria-label="Match celebration">
-          <div className="celebration-modal-card">
-            <p className="celebration-eyebrow">MUTUAL CONNECTION</p>
-            <h2 className="celebration-title">It’s a Match! 🎉</h2>
-            <p className="celebration-subtitle">
-              You and {celebratingMatch.name} connected on Raahi. Say hi and start the conversation!
-            </p>
-            <div className="celebration-clash" aria-hidden="true">
-              <div
-                className="celebration-avatar-ring"
-                style={{ borderColor: 'var(--ep)', boxShadow: '0 0 24px rgba(216,61,180,0.5)' }}
-              >
-                <span>{user?.username ? user.username[0]?.toUpperCase() : '😎'}</span>
-              </div>
-              <span className="celebration-sparkle-center">💗</span>
-              <div
-                className="celebration-avatar-ring"
-                style={{ borderColor: celebratingMatch.ringColor, boxShadow: `0 0 24px ${celebratingMatch.ringColor}` }}
-              >
-                {celebratingMatch.photo ? (
-                  <img src={resolveMediaUrl(celebratingMatch.photo)} alt={celebratingMatch.name} className="celebration-avatar-img" />
-                ) : (
-                  <span>{celebratingMatch.initials}</span>
-                )}
-              </div>
-            </div>
-            <div className="celebration-actions">
-              <Link
-                to={`/conversations/${celebratingMatch.chatId}`}
-                className="celebration-chat-btn bpulse"
-                onClick={() => setCelebratingMatch(null)}
-              >
-                Send Message 👋
-              </Link>
-              <button
-                type="button"
-                className="celebration-keep-btn"
-                onClick={() => setCelebratingMatch(null)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <MatchCelebrationModal
+          match={celebratingMatch}
+          user={user}
+          userPrimaryPhoto={userPrimaryPhoto}
+          onClose={() => setCelebratingMatch(null)}
+        />
       )}
     </PageContainer>
-  )
-}
-
-function DemoMatchCard({
-  candidate,
-  onCelebrate,
-}: {
-  candidate: DemoCandidate
-  onCelebrate: () => void
-}) {
-  return (
-    <Card className="matches-card card-enter" style={{ padding: '18px 20px', borderRadius: 20 }}>
-      <div className="matches-card-top">
-        <div className="conv-row-avatar-ring" style={{ borderColor: candidate.ringColor, boxShadow: `0 0 14px ${candidate.ringColor}55`, width: 50, height: 50 }}>
-          {candidate.photos?.[0] ? (
-            <img src={resolveMediaUrl(candidate.photos[0])} alt={candidate.name} className="conv-row-avatar-img" />
-          ) : (
-            <span className="conv-row-initial" style={{ fontSize: '1.25rem' }}>{candidate.initials}</span>
-          )}
-          <span className="conv-row-corner" style={{ width: 18, height: 18, fontSize: '.72rem' }} aria-hidden="true">{candidate.cornerEmoji}</span>
-        </div>
-        <span className="matches-status" style={{ borderColor: `${candidate.ringColor}55`, color: candidate.ringColor }}>
-          {candidate.eraBadge}
-        </span>
-      </div>
-      <h3 style={{ fontSize: '1.25rem', margin: '10px 0 2px' }}>
-        {candidate.name}, {candidate.age}
-      </h3>
-      <p className="matches-card-location" style={{ fontSize: '.8rem' }}>
-        ⌖ {candidate.city} · {candidate.vibeTag}
-      </p>
-      <p className="matches-card-note" style={{ fontSize: '.82rem', margin: '10px 0', lineHeight: 1.5 }}>{candidate.bio}</p>
-      <div className="matches-card-actions" style={{ marginTop: 12, gap: 8 }}>
-        <Link className="matches-outline-button" to={`/matches/${candidate.id}/details`} style={{ minHeight: 36, padding: '6px 12px', fontSize: '.78rem' }}>
-          Details
-        </Link>
-        <button
-          type="button"
-          className="matches-outline-button"
-          style={{ borderColor: 'rgba(244,82,122,0.4)', color: '#ff9fb5', minHeight: 36, padding: '6px 12px', fontSize: '.78rem' }}
-          onClick={onCelebrate}
-          title="Celebrate mutual match"
-        >
-          Celebrate 🎉
-        </button>
-        <Link className="matches-primary-button" to={`/conversations/${candidate.chatId}`} style={{ minHeight: 36, padding: '6px 14px', fontSize: '.78rem' }}>
-          Chat 👋
-        </Link>
-      </div>
-    </Card>
   )
 }
 
@@ -397,99 +415,32 @@ export function MatchDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const numId = matchId ? Number(matchId) : NaN
-  const demoCandidate = !Number.isNaN(numId) ? getDemoCandidateById(numId) : null
-
   const load = useCallback(async () => {
     const id = Number(matchId)
-    if (demoCandidate) {
-      setLoading(false)
-      return
-    }
     if (!user || !Number.isInteger(id) || id <= 0) return
     setLoading(true); setError('')
     try { setMatch(await fetchMatch(id)) }
     catch (reason) { setError(apiErrorMessage(reason, 'Match details could not be loaded.')) }
     finally { setLoading(false) }
-  }, [matchId, user, demoCandidate])
+  }, [matchId, user])
 
   useEffect(() => {
-    if (demoCandidate) { setLoading(false); return }
     if (user) void load()
     else setLoading(false)
-  }, [load, user, demoCandidate])
+  }, [load, user])
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
-
-  if (demoCandidate) {
-    return (
-      <PageContainer className="matches-page page-enter">
-        <Link className="matches-back-link" to="/matches">
-          <span className="e e-swing">←</span> Back to matches
-        </Link>
-        <Card className="match-detail-card card-enter">
-          <span className="matches-detail-glow" aria-hidden="true" />
-          <p className="integration-eyebrow">MUTUAL CONNECTION</p>
-          <div className="match-detail-avatar-wrap">
-            <div className="intro-avatar-circle" style={{ borderColor: demoCandidate.ringColor, boxShadow: `0 0 24px ${demoCandidate.ringColor}55`, margin: '14px auto', overflow: 'hidden' }}>
-              {demoCandidate.photos?.[0] ? (
-                <img src={resolveMediaUrl(demoCandidate.photos[0])} alt={demoCandidate.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <span className="intro-avatar-letter">{demoCandidate.initials}</span>
-              )}
-            </div>
-          </div>
-          <h1>
-            {demoCandidate.name}, {demoCandidate.age}
-          </h1>
-          <p className="match-detail-location">
-            {demoCandidate.city} · {demoCandidate.eraBadge} · {demoCandidate.vibeTag}
-          </p>
-          <span className="matches-status">
-            <span className="e e-tada">✓</span> Verified connection
-          </span>
-          <p className="match-detail-disclaimer">{demoCandidate.bio}</p>
-          {demoCandidate.photos && demoCandidate.photos.length > 1 && (
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '14px auto', flexWrap: 'wrap' }}>
-              {demoCandidate.photos.slice(1).map((p, idx) => (
-                <img key={idx} src={resolveMediaUrl(p)} alt={`${demoCandidate.name} gallery ${idx + 2}`} style={{ width: 84, height: 104, borderRadius: 14, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.15)' }} />
-              ))}
-            </div>
-          )}
-          {demoCandidate.tags && demoCandidate.tags.length > 0 && (
-            <div className="discover-tags" style={{ justifyContent: 'center', margin: '14px auto' }}>
-              {demoCandidate.tags.map((t, idx) => (
-                <span key={idx}>{t}</span>
-              ))}
-            </div>
-          )}
-          {demoCandidate.compatibilityScore != null && (
-            <div className="discover-alignment" style={{ maxWidth: 360, margin: '14px auto' }}>
-              <strong>{demoCandidate.compatibilityScore}%</strong>
-              <span>Mutual alignment with your generation vibe</span>
-            </div>
-          )}
-          <div className="match-detail-actions">
-            <Link className="matches-primary-button bpulse" to={`/conversations/${demoCandidate.chatId}`}>
-              Start chatting 👋
-            </Link>
-            <Link className="matches-outline-button" to="/matches">
-              Back to matches
-            </Link>
-          </div>
-        </Card>
-      </PageContainer>
-    )
-  }
+  if (!user) return <Navigate to="/login" replace />
 
   if (loading) return <LoadingState label="Loading match details…" />
   if (error) return <PageContainer className="matches-page"><PageError message={error} onRetry={() => void load()} /></PageContainer>
   if (!match) return <PageContainer className="matches-page"><PageError message="This match was not found." /></PageContainer>
   const name = match.matched_user.full_name || match.matched_user.username || 'Raahi member'
+  const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
   return (
     <PageContainer className="matches-page page-enter">
       <Link className="matches-back-link" to="/matches"><span className="e e-swing">←</span> Back to matches</Link>
-      <Card className="match-detail-card card-enter"><span className="matches-detail-glow" aria-hidden="true" /><p className="integration-eyebrow">ACTIVE MUTUAL MATCH</p><Avatar name={name} /><h1>{name}{match.age ? `, ${match.age}` : ''}</h1><p className="match-detail-location">{match.city || 'Raahi member'}{match.era ? ` · ${match.era}` : ''}{match.vibe_tag ? ` · ${match.vibe_tag}` : ''}</p><span className="matches-status"><span className="e e-tada">✓</span> Verified connection</span>
+      <Card className="match-detail-card card-enter"><span className="matches-detail-glow" aria-hidden="true" /><p className="integration-eyebrow">ACTIVE MUTUAL MATCH</p><Avatar name={name} photo={photo} /><h1>{name}{match.age ? `, ${match.age}` : ''}</h1><p className="match-detail-location">{match.city || 'Raahi member'}{match.era ? ` · ${match.era}` : ''}{match.vibe_tag ? ` · ${match.vibe_tag}` : ''}</p><span className="matches-status"><span className="e e-tada">✓</span> Verified connection</span>
         <p className="match-detail-disclaimer">{match.matched_user.bio || 'You both liked each other on Raahi.'}</p>
         {match.profile_alignment && <p className="matches-alignment-note">Profile alignment is {match.profile_alignment.score == null ? 'unavailable' : `${Math.round(match.profile_alignment.score)}%`}. This is not a prediction of relationship success.</p>}
         {match.compatibility_score_status === 'legacy_placeholder' && <p className="matches-alignment-note">The legacy compatibility value is a placeholder; no compatibility score is being shown.</p>}
@@ -499,14 +450,13 @@ export function MatchDetailPage() {
   )
 }
 
-export function ConversationsPage() {
+export function ConversationsListPanel({ selectedChatId }: { selectedChatId?: number | null }) {
   const { user, loading: authLoading } = useAuth()
   const { generation } = useTheme()
   const [chats, setChats] = useState<ChatSummary[]>([])
   const [matches, setMatches] = useState<MatchItem[]>([])
   const [chatError, setChatError] = useState('')
   const [search, setSearch] = useState('')
-  const [demoConversations, setDemoConversations] = useState<DemoProfile[]>(() => getDemoConversationProfiles())
 
   const load = useCallback(async () => {
     if (!user) return
@@ -524,19 +474,20 @@ export function ConversationsPage() {
 
   useEffect(() => {
     if (user) void load()
-    setDemoConversations(getDemoConversationProfiles())
+  }, [load, user])
+
+  useEffect(() => {
+    const handleReload = () => { if (user) void load() }
+    window.addEventListener('raahi:user-blocked', handleReload)
+    window.addEventListener('raahi:match-ended', handleReload)
+    return () => {
+      window.removeEventListener('raahi:user-blocked', handleReload)
+      window.removeEventListener('raahi:match-ended', handleReload)
+    }
   }, [load, user])
 
   const eraModeLabel = generation === 'millennial' ? 'Millennial Mode' : generation === 'zillenial' ? 'Zillenial Mode' : 'Gen Z Mode'
   const eraModeIcon = generation === 'millennial' ? '⚡' : generation === 'zillenial' ? '🎭' : '💀'
-
-  const filteredMatches = useMemo(() => {
-    return demoConversations.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
-  }, [demoConversations, search])
-
-  const filteredConversations = useMemo(() => {
-    return demoConversations.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.lastMessage.toLowerCase().includes(search.trim().toLowerCase()))
-  }, [demoConversations, search])
 
   const filteredChats = useMemo(() => {
     return chats.filter(c => {
@@ -549,190 +500,187 @@ export function ConversationsPage() {
   }, [chats, search])
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
 
-  const isDemoChatList = isDemoModeEnabled() || !user
-  const unreadCount = isDemoChatList
-    ? demoConversations.filter(p => p.unread).length
-    : chats.filter(c => (c.unread_count ?? 0) > 0).length
-  const chatCount = isDemoChatList ? filteredConversations.length : chats.length
+  const unreadCount = chats.filter(c => (c.unread_count ?? 0) > 0).length
+  const chatCount = chats.length
+
+  return (
+    <div className="matches-shell conversations-sidebar-shell">
+      {/* Top Header */}
+      <header className="matches-topbar">
+        <div className="matches-topbar-left">
+          <span className="matches-count-badge" aria-label="Unread count">{unreadCount}</span>
+          <div className="matches-title-wrap">
+            <h1 className="matches-title">{eraModeIcon} Chat</h1>
+            <p className="matches-subtitle">
+              <span className="matches-live-dot" /> {chatCount} chats · {eraModeLabel}
+            </p>
+          </div>
+        </div>
+        <button type="button" className="matches-bell-btn" aria-label="Notifications">
+          <span className="matches-bell-icon" aria-hidden="true">🔔</span>
+        </button>
+      </header>
+
+      {chatError && <p className="chat-inline-error" role="alert">{chatError}</p>}
+
+      {/* Search Input */}
+      <div className="matches-search-wrap">
+        <span className="matches-search-glass" aria-hidden="true">🔍</span>
+        <input
+          type="text"
+          className="matches-search-input"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search matches..."
+          aria-label="Search matches"
+        />
+      </div>
+
+      {/* Scrollable Conversations Content Container */}
+      <div className="matches-scroll-content">
+        {/* NEW MATCHES Section */}
+        {matches.length > 0 && (
+          <section className="matches-section" aria-label="New matches">
+            <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
+            <div className="new-matches-scroll">
+              {matches.slice(0, 10).map(match => {
+                const name = match.matched_user.full_name || match.matched_user.username || 'Match'
+                const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
+                const isSelected = selectedChatId === match.chat_id
+                return (
+                  <Link
+                    key={match.id}
+                    to={`/conversations/${match.chat_id}`}
+                    className={`new-match-avatar-card${isSelected ? ' selected' : ''}`}
+                    aria-label={`Open conversation with ${name}`}
+                  >
+                    <span className="new-match-pill">NEW</span>
+                    <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
+                      <MatchAvatarImage
+                        photo={photo}
+                        name={name}
+                        fallbackInitial={initials(name)}
+                        className="new-match-avatar-img"
+                      />
+                      <span className="new-match-corner" aria-hidden="true">💖</span>
+                    </div>
+                    <span className="new-match-name">{name}</span>
+                    <span className="new-match-status">{match.city || 'Active'}</span>
+                  </Link>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* CONVERSATIONS Section */}
+        <section className="matches-section" aria-label="Conversations">
+          <h2 className="matches-section-heading">💬 CONVERSATIONS</h2>
+          <div className="conversations-cards-column">
+            {filteredChats.length > 0 ? (
+              filteredChats.map(chat => {
+                const isSelected = selectedChatId === chat.chat_id
+                return (
+                  <ConversationRow key={chat.chat_id} chat={chat} isSelected={isSelected} />
+                )
+              })
+            ) : (
+              <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
+                <span className="matches-empty-icon" aria-hidden="true">💬</span>
+                <p className="integration-eyebrow">NO CONVERSATIONS YET</p>
+                <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>
+                  {search.trim() ? `No chats found matching “${search}”` : 'Say hello to your matches'}
+                </h3>
+                <p style={{ fontSize: '.84rem' }}>
+                  {search.trim()
+                    ? 'Try searching with another name or keyword.'
+                    : 'When you match with someone, your messages and chats will appear here.'}
+                </p>
+                {!search.trim() && (
+                  <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
+                    <Link className="matches-primary-button" to="/matches">
+                      View Matches 💖
+                    </Link>
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function ConversationEmptyPanel() {
+  return (
+    <div className="conversation-empty-panel">
+      <div className="conversation-empty-card">
+        <div className="conversation-empty-icon-ring" aria-hidden="true">
+          <span className="conversation-empty-emoji">💬</span>
+          <span className="conversation-empty-sparkle">✦</span>
+        </div>
+        <p className="integration-eyebrow">YOUR CONVERSATIONS</p>
+        <h2 className="conversation-empty-title">Select a Conversation</h2>
+        <p className="conversation-empty-desc">
+          Choose someone from the list on the left to view your message history, send notes, and stay connected.
+        </p>
+        <div className="conversation-empty-actions">
+          <Link className="matches-primary-button" to="/matches">
+            View Matches 💖
+          </Link>
+          <Link className="matches-outline-button" to="/discover">
+            Discover People 🧭
+          </Link>
+        </div>
+        <div className="conversation-empty-pill">
+          <span className="matches-live-dot" /> End-to-end connected in your era
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function ConversationsPage() {
+  const { loading: authLoading } = useAuth()
+
+  if (authLoading) return <LoadingState label="Checking your Raahi session…" />
 
   return (
     <PageContainer className="matches-page conversations-page page-enter">
-      <div className="matches-shell">
-        {/* Top Header */}
-        <header className="matches-topbar">
-          <div className="matches-topbar-left">
-            <span className="matches-count-badge" aria-label="Unread count">{unreadCount}</span>
-            <div className="matches-title-wrap">
-              <h1 className="matches-title">{eraModeIcon} Matches</h1>
-              <p className="matches-subtitle">
-                <span className="matches-live-dot" /> {chatCount} chats · {eraModeLabel}
-              </p>
-            </div>
-          </div>
-          <button type="button" className="matches-bell-btn" aria-label="Notifications">
-            <span className="matches-bell-icon" aria-hidden="true">🔔</span>
-          </button>
-        </header>
-
-        {chatError && <p className="chat-inline-error" role="alert">{chatError}</p>}
-
-        {/* Search Input */}
-        <div className="matches-search-wrap">
-          <span className="matches-search-glass" aria-hidden="true">🔍</span>
-          <input
-            type="text"
-            className="matches-search-input"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search matches..."
-            aria-label="Search matches"
-          />
+      <div className="conversations-desktop-layout">
+        <div className="conversations-panel-left">
+          <ConversationsListPanel />
         </div>
-
-        {/* Scrollable Conversations Content Container */}
-        <div className="matches-scroll-content">
-          {/* NEW MATCHES Section */}
-          {((!isDemoChatList && matches.length > 0) || isDemoChatList) && (
-            <section className="matches-section" aria-label="New matches">
-              <h2 className="matches-section-heading">✨ NEW MATCHES</h2>
-              <div className="new-matches-scroll">
-                {isDemoChatList ? (
-                  filteredMatches.map(match => (
-                    <Link
-                      key={match.id}
-                      to={`/conversations/${match.chatId}`}
-                      className="new-match-avatar-card"
-                      aria-label={`Open conversation with ${match.name}`}
-                    >
-                      <span className="new-match-pill">NEW</span>
-                      <div className="new-match-ring" style={{ borderColor: match.ringColor, boxShadow: `0 0 14px ${match.ringColor}55` }}>
-                        {match.photo ? (
-                          <img src={resolveMediaUrl(match.photo)} alt={match.name} className="new-match-avatar-img" />
-                        ) : (
-                          <span className="new-match-initial">{match.initials}</span>
-                        )}
-                        <span className="new-match-corner" aria-hidden="true">{match.cornerEmoji}</span>
-                      </div>
-                      <span className="new-match-name">{match.name}</span>
-                      <span className="new-match-status">{match.status}</span>
-                    </Link>
-                  ))
-                ) : (
-                  matches.slice(0, 10).map(match => {
-                    const name = match.matched_user.full_name || match.matched_user.username || 'Match'
-                    const photo = match.photos?.[0] || match.matched_user.photo_url || match.matched_user.photos?.[0]
-                    return (
-                      <Link
-                        key={match.id}
-                        to={`/conversations/${match.chat_id}`}
-                        className="new-match-avatar-card"
-                        aria-label={`Open conversation with ${name}`}
-                      >
-                        <span className="new-match-pill">NEW</span>
-                        <div className="new-match-ring" style={{ borderColor: 'var(--ep)', boxShadow: '0 0 14px rgba(216, 61, 180, 0.35)' }}>
-                          {photo ? (
-                            <img src={resolveMediaUrl(photo)} alt={name} className="new-match-avatar-img" />
-                          ) : (
-                            <span className="new-match-initial">{initials(name)}</span>
-                          )}
-                          <span className="new-match-corner" aria-hidden="true">💖</span>
-                        </div>
-                        <span className="new-match-name">{name}</span>
-                        <span className="new-match-status">{match.city || 'Active'}</span>
-                      </Link>
-                    )
-                  })
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* CONVERSATIONS Section */}
-          <section className="matches-section" aria-label="Conversations">
-            <h2 className="matches-section-heading">💬 CONVERSATIONS</h2>
-            <div className="conversations-cards-column">
-              {isDemoChatList ? (
-                filteredConversations.map(conv => (
-                  <Link
-                    key={conv.id}
-                    to={`/conversations/${conv.chatId}`}
-                    className="conversation-card-row"
-                  >
-                    <div className="conv-row-avatar-ring" style={{ borderColor: conv.ringColor, boxShadow: `0 0 10px ${conv.ringColor}44` }}>
-                      {conv.photo ? (
-                        <img src={resolveMediaUrl(conv.photo)} alt={conv.name} className="conv-row-avatar-img" />
-                      ) : (
-                        <span className="conv-row-initial">{conv.initials}</span>
-                      )}
-                      <span className="conv-row-corner" aria-hidden="true">{conv.cornerEmoji}</span>
-                    </div>
-                    <div className="conv-row-body">
-                      <div className="conv-row-head">
-                        <span className="conv-row-name">{conv.name}</span>
-                        {conv.unread && <span className="conv-row-unread-dot" aria-label="Unread message" />}
-                        {conv.isNew && <span className="conv-row-new-pill">New</span>}
-                      </div>
-                      <p className="conv-row-msg">{conv.lastMessage}</p>
-                      <p className="conv-row-seen">
-                        <span className="conv-seen-eye">👁</span> {conv.lastSeen}
-                      </p>
-                    </div>
-                    <div className="conv-row-end">
-                      <span className="conv-row-time">{conv.lastMessageTime}</span>
-                      <span className="conv-row-era-pill" style={{ borderColor: `${conv.ringColor}66`, color: conv.ringColor }}>
-                        {conv.eraBadge}
-                      </span>
-                    </div>
-                  </Link>
-                ))
-              ) : filteredChats.length > 0 ? (
-                filteredChats.map(chat => (
-                  <ConversationRow key={chat.chat_id} chat={chat} />
-                ))
-              ) : (
-                <Card className="matches-empty-card" style={{ margin: '12px 0' }}>
-                  <span className="matches-empty-icon" aria-hidden="true">💬</span>
-                  <p className="integration-eyebrow">NO CONVERSATIONS YET</p>
-                  <h3 style={{ margin: '6px 0', fontSize: '1.1rem' }}>
-                    {search.trim() ? `No chats found matching “${search}”` : 'Say hello to your matches'}
-                  </h3>
-                  <p style={{ fontSize: '.84rem' }}>
-                    {search.trim()
-                      ? 'Try searching with another name or keyword.'
-                      : 'When you match with someone, your messages and chats will appear here.'}
-                  </p>
-                  {!search.trim() && (
-                    <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
-                      <Link className="matches-primary-button" to="/matches">
-                        View Matches 💖
-                      </Link>
-                    </div>
-                  )}
-                </Card>
-              )}
-            </div>
-          </section>
+        <div className="conversations-panel-right desktop-only">
+          <ConversationEmptyPanel />
         </div>
       </div>
     </PageContainer>
   )
 }
 
-function ConversationRow({ chat }: { chat: ChatSummary }) {
+function ConversationRow({ chat, isSelected }: { chat: ChatSummary; isSelected?: boolean }) {
   const message = chat.last_message?.is_deleted ? 'Message deleted' : chat.last_message?.content || (chat.last_message?.message_type === 'image' ? 'Photo' : chat.last_message?.message_type === 'voice' ? 'Voice message' : 'Start a conversation')
-  return <Link className="conversation-card-row" to={`/conversations/${chat.chat_id}`}>
-    <Avatar name={chat.user.full_name || chat.user.username} photo={chat.user.photo_url || chat.user.photos?.[0]} small />
-    <div className="conv-row-body">
-      <div className="conv-row-head">
-        <strong className="conv-row-name">{chat.user.full_name || chat.user.username}{chat.user.is_online && <span className="online-indicator" aria-label="Online" />}</strong>
+  return (
+    <Link className={`conversation-card-row${isSelected ? ' selected' : ''}`} to={`/conversations/${chat.chat_id}`}>
+      <Avatar name={chat.user.full_name || chat.user.username} photo={chat.user.photo_url || chat.user.photos?.[0]} small />
+      <div className="conv-row-body">
+        <div className="conv-row-head">
+          <strong className="conv-row-name">{chat.user.full_name || chat.user.username}{chat.user.is_online && <span className="online-indicator" aria-label="Online" />}</strong>
+          {(chat.unread_count ?? 0) > 0 && <span className="conv-row-unread-dot" aria-label="Unread message" />}
+        </div>
+        <p className="conv-row-msg">{message}</p>
       </div>
-      <p className="conv-row-msg">{message}</p>
-    </div>
-    <div className="conv-row-end">
-      <span>{chat.unread_count ? `${chat.unread_count} new` : chat.last_message?.created_at ? formatTime(chat.last_message.created_at) : ''}</span>
-    </div>
-  </Link>
+      <div className="conv-row-end">
+        <span>{chat.unread_count ? `${chat.unread_count} new` : chat.last_message?.created_at ? formatTime(chat.last_message.created_at) : ''}</span>
+      </div>
+    </Link>
+  )
 }
 
 function formatTime(value: string) {
@@ -794,15 +742,19 @@ function getEraLabel(era: string | null | undefined) {
 }
 
 export function ConversationPage() {
+  const navigate = useNavigate()
   const { conversationId } = useParams()
   const chatId = Number(conversationId)
   const { user, loading: authLoading } = useAuth()
-  const isDemo = (isDemoModeEnabled() || !user) && isDemoChat(chatId)
-  const validChatId = (Number.isInteger(chatId) && chatId > 0) || isDemo
-  const { generation } = useTheme()
+
+  if (authLoading) return <LoadingState label="Checking your Raahi session…" />
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  const validChatId = Number.isInteger(chatId) && chatId > 0
   const token = getAuthToken()
 
-  const demoProfile = useMemo(() => isDemo ? (getDemoProfile(chatId) || null) : null, [chatId, isDemo])
   const [chat, setChat] = useState<ChatSummary | null>(null)
   const [match, setMatch] = useState<MatchItem | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -825,6 +777,8 @@ export function ConversationPage() {
   const [selectedSuggestion, setSelectedSuggestion] = useState<{ id: number; text: string; eventKey: string } | null>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showAiDrawer, setShowAiDrawer] = useState(false)
+  const [showBlockModal, setShowBlockModal] = useState(false)
+  const [showReportModal, setShowReportModal] = useState(false)
   const [callNotice, setCallNotice] = useState<string | null>(null)
   const [recordDuration, setRecordDuration] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -842,49 +796,37 @@ export function ConversationPage() {
   const recordStartedAt = useRef(0)
   const recordIntervalRef = useRef<number | null>(null)
   const [recording, setRecording] = useState(false)
+  const [partnerPhotoError, setPartnerPhotoError] = useState(false)
 
-  const userEraName = generation === 'millennial' ? 'Millennial' : generation === 'zillenial' ? 'Zillenial' : 'Gen Z'
-  const userEraIcon = generation === 'millennial' ? '⚡' : generation === 'zillenial' ? '🎭' : '💀'
+  const partner = chat?.user
+  const partnerUserId = partner?.id || match?.matched_user?.id || null
+  const partnerName = partner?.full_name || partner?.username || match?.matched_user.full_name || match?.matched_user.username || 'Raahi member'
+  const partnerPhoto = partner?.photo_url || partner?.photos?.[0] || match?.photos?.[0] || match?.matched_user.photo_url || match?.matched_user.photos?.[0] || null
+  const partnerInitial = initials(partnerName)
+  const ringColor = 'var(--ep)'
+  const canUseExternalAi = Boolean(user?.ai_provider_processing_enabled)
+
+  useEffect(() => {
+    setPartnerPhotoError(false)
+  }, [partnerPhoto])
+
+  useEffect(() => {
+    setDraft('')
+    setReplyTo(null)
+    setShowEmojiPicker(false)
+    setShowAiDrawer(false)
+  }, [chatId])
 
   const loadMessages = useCallback(async () => {
-    if (isDemo) return
     if (!user || !validChatId) return
     try {
       const history = await fetchMessages(chatId)
       setMessages(history); setHasOlder(history.length === 200); setError('')
     }
     catch (reason) { setError(apiErrorMessage(reason, 'Messages could not be loaded.')) }
-  }, [chatId, isDemo, user, validChatId])
+  }, [chatId, user, validChatId])
 
   useEffect(() => {
-    if (isDemo && demoProfile) {
-      setLoading(false)
-      const rawDemoMsgs = getDemoMessages(chatId)
-      const mapped: ChatMessage[] = rawDemoMsgs.map(m => ({
-        id: m.id,
-        chat_id: chatId,
-        sender_id: m.senderId === 0 ? 0 : demoProfile.id,
-        content: m.content,
-        created_at: m.createdAt,
-        read_at: m.isRead ? m.createdAt : null,
-        is_delivered: m.isDelivered,
-        is_read: m.isRead,
-        is_deleted: false,
-        reply_to_id: null,
-        message_type: m.messageType,
-        audio_url: m.mediaUrl ?? null,
-        audio_duration: m.duration ?? null,
-        audio_mime_type: m.messageType === 'voice' ? 'audio/webm' : null,
-        attachment_name: m.messageType === 'image' ? 'photo.jpg' : null,
-        attachment_mime_type: m.messageType === 'image' ? 'image/jpeg' : null,
-        attachment_size_bytes: null,
-        reactions: m.reactions.map(r => ({ user_id: r.userId, reaction: r.reaction })),
-        reaction_revision: 1
-      }))
-      setMessages(mapped)
-      return
-    }
-
     if (!user || !validChatId) { setLoading(false); return }
     let alive = true
     setLoading(true); setError('')
@@ -904,7 +846,7 @@ export function ConversationPage() {
       .catch(reason => { if (alive) setError(apiErrorMessage(reason, 'This conversation could not be loaded.')) })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [chatId, demoProfile, isDemo, user, validChatId])
+  }, [chatId, user, validChatId])
 
   const handleMessageListScroll = useCallback(() => {
     const el = messageListRef.current
@@ -939,7 +881,7 @@ export function ConversationPage() {
   }, [messages, user?.id])
 
   useEffect(() => {
-    if (isDemo || !user || !token || !validChatId || accessEnded) return
+    if (!user || !token || !validChatId || accessEnded) return
     let alive = true
     intentionalClose.current = false
     const connect = () => {
@@ -1019,7 +961,7 @@ export function ConversationPage() {
       if (typingTimerRef.current) window.clearTimeout(typingTimerRef.current)
       socketRef.current?.close(); socketRef.current = null
     }
-  }, [accessEnded, chat, chatId, isDemo, loadMessages, token, user, validChatId])
+  }, [accessEnded, chat, chatId, loadMessages, token, user, validChatId])
 
   useEffect(() => () => {
     if (recordIntervalRef.current) window.clearInterval(recordIntervalRef.current)
@@ -1029,11 +971,9 @@ export function ConversationPage() {
 
   function handleTyping(value: string) {
     setDraft(value)
-    if (!isDemo) {
-      if (selectedSuggestion && value !== selectedSuggestion.text) setSelectedSuggestion(selectedSuggestion)
-      const socket = socketRef.current
-      if (value.trim() && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', chat_id: chatId }))
-    }
+    if (selectedSuggestion && value !== selectedSuggestion.text) setSelectedSuggestion(selectedSuggestion)
+    const socket = socketRef.current
+    if (value.trim() && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', chat_id: chatId }))
   }
 
   function insertEmoji(emoji: string) {
@@ -1050,44 +990,6 @@ export function ConversationPage() {
     if (event) event.preventDefault()
     const content = draft.trim()
     if (!content || busy || accessEnded) return
-
-    if (isDemo && demoProfile) {
-      const newMsg: ChatMessage = {
-        id: Date.now(),
-        chat_id: chatId,
-        sender_id: 0,
-        content: content,
-        created_at: new Date().toISOString(),
-        read_at: new Date().toISOString(),
-        is_delivered: true,
-        is_read: true,
-        is_deleted: false,
-        reply_to_id: replyTo?.id ?? null,
-        message_type: 'text',
-        audio_url: null,
-        audio_duration: null,
-        audio_mime_type: null,
-        attachment_name: null,
-        attachment_mime_type: null,
-        attachment_size_bytes: null,
-        reactions: [],
-        reaction_revision: 1
-      }
-      appendDemoMessage(chatId, {
-        id: newMsg.id,
-        chatId,
-        senderId: 0,
-        content,
-        createdAt: newMsg.created_at ?? new Date().toISOString(),
-        isRead: true,
-        isDelivered: true,
-        messageType: 'text',
-        reactions: []
-      })
-      setMessages(current => [...current, newMsg])
-      setDraft(''); setReplyTo(null); setShowEmojiPicker(false)
-      return
-    }
 
     setBusy(true); setError('')
     try {
@@ -1106,75 +1008,7 @@ export function ConversationPage() {
     finally { setBusy(false) }
   }
 
-  function handleDemoAttachment(file: File) {
-    const url = URL.createObjectURL(file)
-    const newMsg: ChatMessage = {
-      id: Date.now(),
-      chat_id: chatId,
-      sender_id: user?.id ?? 0,
-      content: file.name,
-      created_at: new Date().toISOString(),
-      read_at: new Date().toISOString(),
-      is_delivered: true,
-      is_read: true,
-      is_deleted: false,
-      reply_to_id: null,
-      message_type: file.type.startsWith('image/') ? 'image' : 'file',
-      audio_url: file.type.startsWith('audio/') ? url : null,
-      audio_duration: null,
-      audio_mime_type: null,
-      attachment_name: file.name,
-      attachment_mime_type: file.type,
-      attachment_size_bytes: file.size,
-      reactions: [],
-      reaction_revision: 1
-    }
-    setMessages(current => [...current, newMsg])
-  }
-
-  function startDemoRecording() {
-    setRecording(true)
-    recordStartedAt.current = Date.now()
-    setRecordDuration(0)
-    recordIntervalRef.current = window.setInterval(() => {
-      setRecordDuration(Math.floor((Date.now() - recordStartedAt.current) / 1000))
-    }, 1000)
-  }
-
-  function stopDemoRecording() {
-    if (recordIntervalRef.current) window.clearInterval(recordIntervalRef.current)
-    setRecording(false)
-    const duration = Math.max(1, recordDuration)
-    const voiceMsg: ChatMessage = {
-      id: Date.now(),
-      chat_id: chatId,
-      sender_id: user?.id ?? 0,
-      content: `Voice message (${duration}s)`,
-      created_at: new Date().toISOString(),
-      read_at: new Date().toISOString(),
-      is_delivered: true,
-      is_read: true,
-      is_deleted: false,
-      reply_to_id: null,
-      message_type: 'voice',
-      audio_url: null,
-      audio_duration: duration,
-      audio_mime_type: 'audio/webm',
-      attachment_name: 'voice.webm',
-      attachment_mime_type: 'audio/webm',
-      attachment_size_bytes: 4096,
-      reactions: [],
-      reaction_revision: 1
-    }
-    setMessages(current => [...current, voiceMsg])
-    setRecordDuration(0)
-  }
-
   async function removeMessage(message: ChatMessage) {
-    if (isDemo) {
-      setMessages(current => current.map(item => item.id === message.id ? { ...item, is_deleted: true, content: null, attachment_name: null } : item))
-      return
-    }
     setError('')
     try {
       await deleteMessage(message.id)
@@ -1183,7 +1017,6 @@ export function ConversationPage() {
   }
 
   async function loadOlderMessages() {
-    if (isDemo) return
     const firstId = messages[0]?.id
     if (!firstId || loadingOlder) return
     setLoadingOlder(true)
@@ -1197,10 +1030,6 @@ export function ConversationPage() {
 
   async function removeConversation() {
     if (!window.confirm('Remove this conversation from your list? The other person will keep their conversation history.')) return
-    if (isDemo) {
-      window.location.assign('/conversations')
-      return
-    }
     try { await deleteConversation(chatId); window.location.assign('/conversations') }
     catch (reason) { setError(apiErrorMessage(reason, 'Conversation could not be removed.')) }
   }
@@ -1272,14 +1101,6 @@ export function ConversationPage() {
   }
 
   async function runAi(kind: 'suggestions' | 'coach' | 'insights') {
-    if (isDemo) {
-      setSuggestions([
-        { style: 'Vibe Check', message: "Hey Jeet! Are you more of a weekend explorer or cosy night in person?" },
-        { style: 'Playful', message: "Okay real question: what song are you playing on aux first?" },
-        { style: 'Deep Dive', message: "Low-key love your vibe! What's something that instantly makes your day?" }
-      ])
-      return
-    }
     setAiBusy(true); setAiError(''); setAiResult(null)
     try {
       if (kind === 'suggestions') setSuggestions((await fetchSuggestions(chatId)).suggestions)
@@ -1289,7 +1110,7 @@ export function ConversationPage() {
   }
 
   async function selectSuggestion(suggestion: { suggestion_id?: number; message: string }) {
-    if (!isDemo && suggestion.suggestion_id) {
+    if (suggestion.suggestion_id) {
       const eventKey = `selected-${crypto.randomUUID()}`
       try { await trackSuggestionEvent(suggestion.suggestion_id, 'selected', eventKey) }
       catch (reason) { setAiError(apiErrorMessage(reason, 'This suggestion can no longer be used.')); return }
@@ -1301,89 +1122,93 @@ export function ConversationPage() {
   }
 
   function sendReaction(message: ChatMessage) {
-    if (isDemo) {
-      addDemoReaction(chatId, message.id, '❤️')
-      setMessages(current => current.map(m => {
-        if (m.id !== message.id) return m
-        const hasHeart = m.reactions.some(r => r.reaction === '❤️')
-        const reactions = hasHeart ? m.reactions.filter(r => r.reaction !== '❤️') : [...m.reactions, { user_id: 0, reaction: '❤️' }]
-        return { ...m, reactions }
-      }))
-      return
-    }
     const socket = socketRef.current
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'message_reaction', chat_id: chatId, message_id: message.id, reaction: '❤️', request_id: crypto.randomUUID() }))
   }
 
   if (authLoading) return <LoadingState label="Checking your Raahi session…" />
-  if (!user && !isDemo) return <AuthGate />
-  if (!validChatId || (isDemo && !demoProfile)) {
+  if (!user) return <AuthGate />
+  if (!validChatId) {
     return (
-      <PageContainer className="matches-page">
-        <Link className="matches-back-link" to="/conversations">
-          ← Back to conversations
-        </Link>
-        <Card className="matches-empty-card" style={{ marginTop: 20 }}>
-          <span className="matches-empty-icon" aria-hidden="true">💬</span>
-          <h2>Conversation not found</h2>
-          <p>This conversation is not available or has been removed.</p>
-          <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 14 }}>
-            <Link className="matches-primary-button" to="/discover">
-              Find people on Discover
-            </Link>
+      <PageContainer className="matches-page conversation-page">
+        <div className="conversations-desktop-layout">
+          <div className="conversations-panel-left desktop-only">
+            <ConversationsListPanel selectedChatId={null} />
           </div>
-        </Card>
+          <div className="conversations-panel-right">
+            <div className="conversation-empty-panel">
+              <Card className="matches-empty-card" style={{ marginTop: 20 }}>
+                <span className="matches-empty-icon" aria-hidden="true">💬</span>
+                <h2>Conversation not found</h2>
+                <p>This conversation is not available or has been removed.</p>
+                <div className="matches-card-actions" style={{ justifyContent: 'center', marginTop: 14 }}>
+                  <Link className="matches-primary-button" to="/discover">
+                    Find people on Discover
+                  </Link>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
       </PageContainer>
     )
   }
-  if (loading) return <LoadingState label="Opening conversation…" />
-  if (error && !messages.length && !chat && !isDemo) return <PageContainer className="matches-page"><PageError message={error} onRetry={() => void loadMessages()} /></PageContainer>
-
-  const partner = isDemo ? null : chat?.user
-  const partnerName = isDemo ? (demoProfile?.name ?? 'Connection') : (partner?.full_name || partner?.username || match?.matched_user.full_name || match?.matched_user.username || 'Raahi member')
-  const partnerPhoto = isDemo ? (demoProfile?.photo ?? null) : (partner?.photo_url || partner?.photos?.[0] || match?.photos?.[0] || match?.matched_user.photo_url || match?.matched_user.photos?.[0] || null)
-  const partnerInitial = isDemo ? (demoProfile?.initials ?? '?') : initials(partnerName)
-  const ringColor = isDemo ? (demoProfile?.ringColor ?? '#f59e0b') : 'var(--ep)'
-  const canUseExternalAi = isDemo || Boolean(user?.ai_provider_processing_enabled)
+  if (loading) {
+    return (
+      <PageContainer className="matches-page conversation-page">
+        <div className="conversations-desktop-layout">
+          <div className="conversations-panel-left desktop-only">
+            <ConversationsListPanel selectedChatId={chatId} />
+          </div>
+          <div className="conversations-panel-right">
+            <div className="conversation-empty-panel">
+              <LoadingState label="Opening conversation…" />
+            </div>
+          </div>
+        </div>
+      </PageContainer>
+    )
+  }
+  if (error && !messages.length && !chat) return <PageContainer className="matches-page"><PageError message={error} onRetry={() => void loadMessages()} /></PageContainer>
 
   return (
     <PageContainer className="matches-page conversation-page">
-      <section className="conversation-shell page-enter" aria-label={`Conversation with ${partnerName}`}>
-        {/* Exact Header Reproduction */}
-        <header className="conversation-header">
-          <Link className="chat-circle-btn chat-back-btn" to="/conversations" aria-label="Back to conversations">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
-          </Link>
+      <div className="conversations-desktop-layout">
+        <div className="conversations-panel-left desktop-only">
+          <ConversationsListPanel selectedChatId={chatId} />
+        </div>
+        <div className="conversations-panel-right">
+          <section className="conversation-shell page-enter" aria-label={`Conversation with ${partnerName}`}>
+            {/* Exact Header Reproduction */}
+            <header className="conversation-header">
+              <Link className="chat-circle-btn chat-back-btn" to="/conversations" aria-label="Back to conversations">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+              </Link>
           <div className="chat-header-avatar-wrap">
-            <div className="chat-avatar-ring" style={{ borderColor: ringColor, boxShadow: `0 0 12px ${ringColor}66` }}>
-              {partnerPhoto ? (
-                <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="chat-avatar-photo" />
+            <div className="chat-avatar-ring" style={{ borderColor: ringColor, boxShadow: `0 0 12px ${ringColor}66`, overflow: 'hidden' }}>
+              {partnerPhoto && !partnerPhotoError ? (
+                <img
+                  src={resolveMediaUrl(partnerPhoto)}
+                  alt={partnerName}
+                  className="chat-avatar-photo"
+                  onError={() => setPartnerPhotoError(true)}
+                />
               ) : (
                 <span className="chat-avatar-letter">{partnerInitial}</span>
               )}
-              {isDemo && <span className="chat-avatar-corner" aria-hidden="true">{demoProfile?.cornerEmoji ?? '🎭'}</span>}
             </div>
           </div>
           <div className="chat-header-copy">
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <h1 className="chat-header-title">{partnerName}</h1>
-              {isDemo && (
-                <span style={{ fontSize: '.6rem', padding: '1px 6px', borderRadius: 999, background: 'rgba(139,92,246,0.25)', border: '1px solid rgba(139,92,246,0.45)', color: '#d8b4fe', fontWeight: 800, letterSpacing: '.03em' }}>
-                  SAMPLE PROFILE
-                </span>
-              )}
             </div>
             <p className="chat-header-status-line">
-              <span className="chat-seen-eye">👁</span> {isDemo ? demoProfile?.lastSeen : (presence ? 'Active now' : partner?.last_seen ? formatLastSeen(partner.last_seen, false) : 'Active mutual match')}
+              <span className="chat-seen-eye">👁</span> {presence ? 'Active now' : partner?.last_seen ? formatLastSeen(partner.last_seen, false) : 'Active mutual match'}
             </p>
             <p className="chat-header-vibe-line">
-              {isDemo ? (
-                <span>{demoProfile?.eraIcon} They vibe as {demoProfile?.era} • {userEraIcon} You vibe as {userEraName}</span>
-              ) : (
-                <span>{getEraLabel(match?.era)} • {match?.compatibility_score ? `${match.compatibility_score}% match` : 'Mutual match'}</span>
-              )}
+              <span>{getEraLabel(match?.era)} • {match?.compatibility_score ? `${match.compatibility_score}% match` : 'Mutual match'}</span>
             </p>
           </div>
           <div className="chat-header-actions">
@@ -1392,11 +1217,45 @@ export function ConversationPage() {
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
               </svg>
             </button>
+            {partnerUserId && (
+              <SafetyMenuDropdown
+                onOpenReport={() => setShowReportModal(true)}
+                onOpenBlock={() => setShowBlockModal(true)}
+                ariaLabel={`Safety options for conversation with ${partnerName}`}
+              />
+            )}
             <Link to="/settings" className="chat-header-settings-pill" title="Settings" aria-label="Settings">
               <span className="chat-settings-icon" aria-hidden="true">⚙</span> Settings
             </Link>
           </div>
         </header>
+
+        {partnerUserId && (
+          <>
+            <BlockConfirmationModal
+              isOpen={showBlockModal}
+              targetUserId={partnerUserId}
+              targetName={partnerName}
+              isMatchOrChat={true}
+              onClose={() => setShowBlockModal(false)}
+              onSuccess={() => {
+                window.dispatchEvent(new CustomEvent('raahi:user-blocked', { detail: { userId: partnerUserId, chatId } }))
+                window.dispatchEvent(new CustomEvent('raahi:match-ended', { detail: { chatId } }))
+                navigate('/conversations')
+              }}
+            />
+            <ReportUserModal
+              isOpen={showReportModal}
+              targetUserId={partnerUserId}
+              targetName={partnerName}
+              onClose={() => setShowReportModal(false)}
+              onSuccess={(msg) => {
+                setCallNotice(msg)
+                window.setTimeout(() => setCallNotice(null), 3500)
+              }}
+            />
+          </>
+        )}
 
         {callNotice && <div className="chat-toast" role="status">{callNotice}</div>}
         {accessEnded && <div className="conversation-disclaimer"><span aria-hidden="true">✦</span><p>This match has ended. History remains readable; sending, AI tools, and new media are disabled.</p><button type="button" className="chat-remove-ended-btn" onClick={() => void removeConversation()}>Remove conversation</button></div>}
@@ -1418,8 +1277,13 @@ export function ConversationPage() {
             <div className="intro-avatar-container">
               <div className="intro-avatar-halo" aria-hidden="true" style={{ background: `radial-gradient(circle, ${ringColor}66, transparent 70%)` }} />
               <div className="intro-avatar-circle" style={{ borderColor: ringColor, boxShadow: `0 0 22px ${ringColor}55`, overflow: 'hidden' }}>
-                {partnerPhoto ? (
-                  <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="intro-avatar-photo" />
+                {partnerPhoto && !partnerPhotoError ? (
+                  <img
+                    src={resolveMediaUrl(partnerPhoto)}
+                    alt={partnerName}
+                    className="intro-avatar-photo"
+                    onError={() => setPartnerPhotoError(true)}
+                  />
                 ) : (
                   <span className="intro-avatar-letter">{partnerInitial}</span>
                 )}
@@ -1427,9 +1291,9 @@ export function ConversationPage() {
             </div>
             <h2 className="intro-name">{partnerName}</h2>
             <p className="intro-subtext">
-              <span>{isDemo ? demoProfile?.eraBadge : getEraLabel(match?.era)}</span>
+              <span>{getEraLabel(match?.era)}</span>
               <span className="intro-dot">·</span>
-              <span className="intro-seen"><span className="chat-seen-eye">👁</span> {isDemo ? demoProfile?.lastSeen : (presence ? 'Active now' : partner?.last_seen ? formatLastSeen(partner.last_seen, false) : 'Active')}</span>
+              <span className="intro-seen"><span className="chat-seen-eye">👁</span> {presence ? 'Active now' : partner?.last_seen ? formatLastSeen(partner.last_seen, false) : 'Active'}</span>
             </p>
             <div className="intro-hearts" aria-hidden="true">
               <span className="intro-heart e-float">💗</span>
@@ -1445,8 +1309,13 @@ export function ConversationPage() {
             <article className={`message-row ${message.sender_id === (user?.id ?? 0) ? 'outgoing' : 'incoming'}`} key={message.id}>
               {message.sender_id !== (user?.id ?? 0) && (
                 <div className="message-partner-avatar-ring" style={{ borderColor: ringColor, overflow: 'hidden' }}>
-                  {partnerPhoto ? (
-                    <img src={resolveMediaUrl(partnerPhoto)} alt={partnerName} className="message-partner-avatar-img" />
+                  {partnerPhoto && !partnerPhotoError ? (
+                    <img
+                      src={resolveMediaUrl(partnerPhoto)}
+                      alt={partnerName}
+                      className="message-partner-avatar-img"
+                      onError={() => setPartnerPhotoError(true)}
+                    />
                   ) : (
                     <span>{partnerInitial}</span>
                   )}
@@ -1468,7 +1337,7 @@ export function ConversationPage() {
                 {message.reactions.length > 0 && <div className="message-reactions">{message.reactions.map((reaction, index) => <span key={`${reaction.user_id}-${index}`}>{reaction.reaction}</span>)}</div>}
                 {!message.is_deleted && <div className="message-actions">
                   <button type="button" onClick={() => setReplyTo(message)} aria-label="Reply to message">↩</button>
-                  <button type="button" onClick={() => sendReaction(message)} disabled={accessEnded || (!isDemo && connection !== 'connected')} aria-label="React with heart">♡</button>
+                  <button type="button" onClick={() => sendReaction(message)} disabled={accessEnded || connection !== 'connected'} aria-label="React with heart">♡</button>
                   {message.sender_id === (user?.id ?? 0) && <button type="button" onClick={() => void removeMessage(message)} aria-label="Delete message for everyone">⌫</button>}
                 </div>}
               </div>
@@ -1583,7 +1452,7 @@ export function ConversationPage() {
               onClick={() => {
                 const next = !showAiDrawer
                 setShowAiDrawer(next)
-                if (next && (!suggestions.length || isDemo) && !aiBusy) void runAi('suggestions')
+                if (next && !suggestions.length && !aiBusy) void runAi('suggestions')
               }}
             >
               <span className="ai-sparkle-glyph" aria-hidden="true">✦</span>
@@ -1602,8 +1471,7 @@ export function ConversationPage() {
                 onChange={event => {
                   const file = event.currentTarget.files?.[0]
                   if (file) {
-                    if (isDemo) handleDemoAttachment(file)
-                    else void sendAttachment(file)
+                    void sendAttachment(file)
                   }
                   event.currentTarget.value = ''
                 }}
@@ -1617,7 +1485,7 @@ export function ConversationPage() {
               title={recording ? 'Stop and send voice message' : 'Record voice message'}
               aria-label={recording ? 'Stop and send voice note' : 'Record voice message'}
               disabled={uploadProgress !== null}
-              onClick={recording ? (isDemo ? stopDemoRecording : stopRecording) : (isDemo ? startDemoRecording : () => void startRecording())}
+              onClick={recording ? stopRecording : () => void startRecording()}
             >
               {recording ? (
                 <span className="mic-stop-square" aria-hidden="true" />
@@ -1648,7 +1516,9 @@ export function ConversationPage() {
         ) : (
           <div className="conversation-composer chat-readonly-note">Conversation is read-only</div>
         )}
-      </section>
+          </section>
+        </div>
+      </div>
     </PageContainer>
   )
 }

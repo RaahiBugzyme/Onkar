@@ -261,3 +261,37 @@ def validate_test_database_url(
         raise ValueError("TEST_DATABASE_URL points to the application database")
 
     return parsed_test
+
+
+def enforce_test_environment(backend_root=None) -> URL:
+    """Ensure that test execution strictly points to an isolated test database.
+
+    Loads .env and .env.test if needed, validates TEST_DATABASE_URL, sets
+    RAAHI_TEST_MODE=1, and overrides DATABASE_URL to the validated test database.
+    Raises RuntimeError if TEST_DATABASE_URL is missing, invalid, or targets
+    the development/production database.
+    """
+    import os
+    from pathlib import Path
+    from dotenv import load_dotenv, dotenv_values
+
+    root = backend_root or Path(__file__).resolve().parent.parent
+    load_dotenv(root / ".env", override=False)
+    load_dotenv(root / ".env.test", override=False)
+
+    app_url = os.getenv("DATABASE_URL")
+    if not app_url and (root / ".env").exists():
+        app_url = dotenv_values(root / ".env").get("DATABASE_URL")
+    test_url = os.getenv("TEST_DATABASE_URL")
+
+    try:
+        validated = validate_test_database_url(test_url, app_url)
+    except ValueError as exc:
+        raise RuntimeError(f"Database safety guard rejected test execution: {exc}") from exc
+
+    os.environ["RAAHI_TEST_MODE"] = "1"
+    app_fp = database_fingerprint(app_url)
+    if app_fp:
+        os.environ["RAAHI_APPLICATION_DATABASE_FINGERPRINT"] = app_fp
+    os.environ["DATABASE_URL"] = validated.render_as_string(hide_password=False)
+    return validated

@@ -16,6 +16,9 @@ import uuid
 from datetime import date, timedelta
 from fastapi.testclient import TestClient
 
+from app.db_safety import enforce_test_environment
+enforce_test_environment()
+
 from app.main import app
 from app import models, database, schemas
 

@@ -32,6 +32,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     clearAuthToken()
+    try {
+      globalThis.localStorage?.removeItem('raahiDemoUserProfile.v1')
+      globalThis.localStorage?.removeItem('raahi.demo_mode')
+      globalThis.sessionStorage?.removeItem('raahi.onboardingDraft.v2')
+    } catch {
+      // storage unavailable
+    }
     setUser(null)
   }, [])
 
@@ -58,6 +65,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const form = new URLSearchParams({ username: email.trim(), password })
     const result = await apiRequest<{ access_token: string; token_type: string }>('/login', { method: 'POST', body: form })
+    try {
+      globalThis.localStorage?.removeItem('raahiDemoUserProfile.v1')
+      globalThis.localStorage?.removeItem('raahi.demo_mode')
+    } catch {
+      // storage unavailable
+    }
     setAuthToken(result.access_token)
     try {
       const current = await apiRequest<CurrentUser>('/me')
@@ -69,6 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loginWithToken = useCallback(async (token: string) => {
+    try {
+      globalThis.localStorage?.removeItem('raahiDemoUserProfile.v1')
+      globalThis.localStorage?.removeItem('raahi.demo_mode')
+    } catch {
+      // storage unavailable
+    }
     setAuthToken(token)
     try {
       const current = await apiRequest<CurrentUser>('/me')

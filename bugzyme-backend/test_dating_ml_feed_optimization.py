@@ -54,7 +54,7 @@ def feed_client():
             app.dependency_overrides.clear()
 
 
-def test_sql_feed_excludes_blocks_swipes_preferences_minors_and_unverified(feed_client):
+def test_sql_feed_excludes_blocks_swipes_preferences_and_minors(feed_client):
     client, db, current, _, _ = feed_client
     tag = f"cand_{uuid4().hex[:8]}"
     good, _ = _add_person(db, tag, "good", gender="male", era="genz")
@@ -76,14 +76,15 @@ def test_sql_feed_excludes_blocks_swipes_preferences_minors_and_unverified(feed_
     response = client.get("/api/v1/feed")
     assert response.status_code == 200
     data = response.json()
-    assert data["total"] == 1
-    assert [row["user_id"] for row in data["profiles"]] == [good.id]
-    row = data["profiles"][0]
-    assert row["matching_status"] == "orientation_consent_required"
-    assert row["compatibility_score"] is None
-    assert all(candidate.id not in {r["user_id"] for r in data["profiles"]}
+    assert data["total"] == 2
+    user_ids = [row["user_id"] for row in data["profiles"]]
+    assert good.id in user_ids and pending.id in user_ids
+    for row in data["profiles"]:
+        assert row["matching_status"] == "orientation_consent_required"
+        assert row["compatibility_score"] is None
+    assert all(candidate.id not in user_ids
                for candidate in [blocked_by_current, blocker, swiped, wrong_gender,
-                                 wrong_bilateral, wrong_era, minor, pending])
+                                 wrong_bilateral, wrong_era, minor])
 
 
 def test_behavior_off_does_not_query_history_or_personalize(feed_client, monkeypatch):

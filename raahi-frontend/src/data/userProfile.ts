@@ -34,12 +34,20 @@ export function blankProfileDraft(): DemoProfileDraft {
   }
 }
 
+export function clearDemoProfile(): void {
+  try {
+    localStorage.removeItem(USER_PROFILE_STORAGE_KEY)
+  } catch {
+    // Storage unavailable
+  }
+}
+
 function defaultDemoProfile(): DemoUserProfile {
   const dummyAvatar = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%"><rect width="100%" height="100%" fill="%231a0a33"/><circle cx="200" cy="180" r="100" fill="%238b5cf6" fill-opacity="0.25"/><circle cx="200" cy="180" r="85" fill="%23120626" stroke="%23d83db4" stroke-width="4"/><text x="200" y="215" font-size="95" text-anchor="middle">😎</text></svg>`
   const now = new Date().toISOString()
   return {
     id: 'demo-user-1',
-    name: 'onkarnagargoje12',
+    name: 'Raahi member',
     age: 23,
     city: 'Mumbai',
     era: 'genz',

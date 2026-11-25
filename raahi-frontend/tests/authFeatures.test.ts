@@ -12,6 +12,7 @@ import {
   verifyPasswordResetOtp,
   sendPasswordResetLink,
   confirmPasswordResetLink,
+  deleteMyAccount,
 } from '../src/api/auth.ts'
 
 test('getGoogleAuthUrl calls /api/v1/auth/google/url with GET', async () => {
@@ -174,4 +175,22 @@ test('Search route is removed from application navigation items and routes', () 
   assert.ok(appContent.includes('path="/forgot-password"'), 'App.tsx must have /forgot-password route')
   assert.ok(appContent.includes('path="/reset-password"'), 'App.tsx must have /reset-password route')
   assert.ok(appContent.includes('path="/auth/google/callback"'), 'App.tsx must have /auth/google/callback route')
+})
+
+test('deleteMyAccount dispatches DELETE /me with bearer auth', async () => {
+  const originalFetch = globalThis.fetch
+  let observed: Request | undefined
+  globalThis.fetch = async (input, init) => {
+    observed = new Request(input, init)
+    return Response.json({ deleted: true, user_id: 42 })
+  }
+  try {
+    const res = await deleteMyAccount()
+    assert.equal(res.deleted, true)
+    assert.equal(res.user_id, 42)
+    assert.equal(new URL(observed!.url).pathname, '/me')
+    assert.equal(observed!.method, 'DELETE')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

@@ -16,12 +16,14 @@ import hashlib
 import json
 import logging
 import secrets
+import sqlite3
 import threading
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from google.oauth2 import id_token as google_id_token
@@ -37,10 +39,35 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # Scopes strictly limited to user authentication and identity
 GOOGLE_SIGNIN_SCOPES = ["openid", "email", "profile"]
 
-# Thread-safe in-memory OAuth state cache with TTL (10 minutes)
+# Thread-safe OAuth state cache with persistent storage resilient to Uvicorn reloads.
 _STATE_LOCK = threading.Lock()
 _ACTIVE_STATES: Dict[str, Dict[str, Any]] = {}
 STATE_TTL_SECONDS = 600
+
+
+def _get_storage_db_path() -> Optional[Path]:
+    """Return path to persistent SQLite store for OAuth states."""
+    try:
+        configured = getattr(settings, "ATTACHMENT_STORAGE_DIR", "storage/attachments")
+        storage_root = Path(configured).parent
+        storage_root.mkdir(parents=True, exist_ok=True)
+        return storage_root / "oauth_states.sqlite3"
+    except Exception:
+        return None
+
+
+def _init_sqlite_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS oauth_states (
+            state_hash TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS ix_oauth_states_expires ON oauth_states(expires_at)
+    """)
 
 
 def _clean_expired_states() -> None:
@@ -49,6 +76,16 @@ def _clean_expired_states() -> None:
     for s in expired:
         _ACTIVE_STATES.pop(s, None)
 
+    db_path = _get_storage_db_path()
+    if db_path and db_path.exists():
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                _init_sqlite_table(conn)
+                conn.execute("DELETE FROM oauth_states WHERE expires_at < ?", (now,))
+                conn.commit()
+        except Exception as exc:
+            logger.debug("Failed cleaning expired SQLite states: %s", exc)
+
 
 def save_oauth_state(
     state: str,
@@ -56,25 +93,100 @@ def save_oauth_state(
     redirect_uri: str,
     user_id: Optional[str] = None,
 ) -> None:
+    now = time.time()
+    expires_at = now + STATE_TTL_SECONDS
+    state_payload = {
+        "code_verifier": code_verifier,
+        "redirect_uri": redirect_uri,
+        "user_id": user_id,
+        "expires_at": expires_at,
+    }
+
     with _STATE_LOCK:
         _clean_expired_states()
-        _ACTIVE_STATES[state] = {
-            "code_verifier": code_verifier,
-            "redirect_uri": redirect_uri,
-            "user_id": user_id,
-            "expires_at": time.time() + STATE_TTL_SECONDS,
-        }
+        _ACTIVE_STATES[state] = state_payload
+
+        db_path = _get_storage_db_path()
+        if db_path:
+            try:
+                state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+                with sqlite3.connect(db_path, timeout=5.0) as conn:
+                    _init_sqlite_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO oauth_states (state_hash, payload, expires_at, created_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (state_hash, json.dumps(state_payload), expires_at, now))
+                    conn.commit()
+            except Exception as exc:
+                logger.warning("Persistent OAuth state save failed, falling back to in-memory: %s", exc)
+
+    # Diagnostic logging: safe metadata only (no raw tokens or secrets)
+    logger.info("OAuth state registered: ttl=%ds, redirect_uri=%s", STATE_TTL_SECONDS, redirect_uri)
 
 
 def verify_and_consume_oauth_state(state: str) -> Optional[Dict[str, Any]]:
+    if not state or not isinstance(state, str):
+        logger.warning("OAuth state verification rejected: empty or invalid state")
+        return None
+
+    now = time.time()
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+
     with _STATE_LOCK:
         _clean_expired_states()
+
+        # 1. Check persistent storage first (atomic single-use consume)
+        db_path = _get_storage_db_path()
+        if db_path and db_path.exists():
+            try:
+                with sqlite3.connect(db_path, timeout=5.0) as conn:
+                    _init_sqlite_table(conn)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT payload, expires_at FROM oauth_states WHERE state_hash = ?", (state_hash,))
+                    row = cursor.fetchone()
+                    if row:
+                        payload_str, expires_at = row
+                        cursor.execute("DELETE FROM oauth_states WHERE state_hash = ?", (state_hash,))
+                        conn.commit()
+
+                        _ACTIVE_STATES.pop(state, None)
+
+                        if expires_at < now:
+                            logger.warning("OAuth state verification rejected: state has expired (persistent)")
+                            return None
+
+                        logger.info("OAuth state successfully verified and consumed from persistent store")
+                        return json.loads(payload_str)
+            except Exception as exc:
+                logger.warning("Persistent OAuth state lookup encountered error, checking in-memory: %s", exc)
+
+        # 2. Check in-memory store
         data = _ACTIVE_STATES.pop(state, None)
         if not data:
+            logger.warning("OAuth state verification rejected: state not found or already consumed")
             return None
-        if data.get("expires_at", 0) < time.time():
+
+        if data.get("expires_at", 0) < now:
+            logger.warning("OAuth state verification rejected: state has expired (in-memory)")
             return None
+
+        logger.info("OAuth state successfully verified and consumed from in-memory store")
         return data
+
+
+def clear_oauth_states() -> None:
+    """Clear all stored states in memory and persistent storage (testing helper)."""
+    with _STATE_LOCK:
+        _ACTIVE_STATES.clear()
+        db_path = _get_storage_db_path()
+        if db_path and db_path.exists():
+            try:
+                with sqlite3.connect(db_path, timeout=5.0) as conn:
+                    _init_sqlite_table(conn)
+                    conn.execute("DELETE FROM oauth_states")
+                    conn.commit()
+            except Exception:
+                pass
 
 
 def is_google_auth_configured() -> bool:

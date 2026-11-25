@@ -11,7 +11,7 @@
   padding: calc(env(safe-area-inset-top, 0px) + 16px) clamp(16px, 4vw, 22px) calc(env(safe-area-inset-bottom, 0px) + clamp(36px, 6vh, 64px));
   background: var(--bd, #0d0a1a);
   scrollbar-width: thin;
-  scrollbar-color: rgba(216, 61, 180, 0.4) transparent;
+  scrollbar-color: color-mix(in srgb, var(--ep) 45%, transparent) transparent;
 }
 
 .verification-v3-screen::-webkit-scrollbar {
@@ -21,7 +21,7 @@
   background: transparent;
 }
 .verification-v3-screen::-webkit-scrollbar-thumb {
-  background: rgba(216, 61, 180, 0.35);
+  background: color-mix(in srgb, var(--ep) 40%, transparent);
   border-radius: 999px;
 }
 

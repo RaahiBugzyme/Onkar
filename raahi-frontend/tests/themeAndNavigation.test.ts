@@ -195,4 +195,91 @@ describe('Part 2: Navigation Redesign – Hamburger Menu and Minimal Header', ()
     // No redundant matches-bottom-bar in MatchesPages
     assert.ok(!matchesPagesTsx.includes('matches-bottom-bar'), 'MatchesPages must not render matches-bottom-bar')
   })
+
+  it('implements subtle premium animations for navigation icons on hover, active tap and active state', () => {
+    // 1. All 8 icons have dedicated semantic icon classes in IntegrationLayout.tsx
+    assert.ok(layoutTsx.includes('icon-discover'), 'Discover icon must have icon-discover class')
+    assert.ok(layoutTsx.includes('icon-matches'), 'Matches icon must have icon-matches class')
+    assert.ok(layoutTsx.includes('icon-chat'), 'Chat icon must have icon-chat class')
+    assert.ok(layoutTsx.includes('icon-profiles'), 'Profiles icon must have icon-profiles class')
+    assert.ok(layoutTsx.includes('icon-settings'), 'Settings icon must have icon-settings class')
+    assert.ok(layoutTsx.includes('icon-privacy'), 'Privacy icon must have icon-privacy class')
+    assert.ok(layoutTsx.includes('icon-help'), 'Help icon must have icon-help class')
+    assert.ok(layoutTsx.includes('icon-logout'), 'Logout icon must have icon-logout class')
+
+    // 2. Foundation CSS defines custom premium keyframes for each icon
+    assert.ok(foundationCss.includes('@keyframes nav-compass-spin'), 'CSS must define nav-compass-spin animation')
+    assert.ok(foundationCss.includes('@keyframes nav-heartbeat'), 'CSS must define nav-heartbeat animation')
+    assert.ok(foundationCss.includes('@keyframes nav-chat-bounce'), 'CSS must define nav-chat-bounce animation')
+    assert.ok(foundationCss.includes('@keyframes nav-profile-lift'), 'CSS must define nav-profile-lift animation')
+    assert.ok(foundationCss.includes('@keyframes nav-gear-rotate'), 'CSS must define nav-gear-rotate animation')
+    assert.ok(foundationCss.includes('@keyframes nav-shield-protect'), 'CSS must define nav-shield-protect animation')
+    assert.ok(foundationCss.includes('@keyframes nav-buoy-float'), 'CSS must define nav-buoy-float animation')
+    assert.ok(foundationCss.includes('@keyframes nav-door-exit'), 'CSS must define nav-door-exit animation')
+
+    // 3. Desktop hover and mobile tap interaction triggers
+    assert.ok(foundationCss.includes(':hover .icon-discover'), 'Must animate on desktop hover')
+    assert.ok(foundationCss.includes(':active .icon-discover'), 'Must animate on mobile active tap')
+
+    // 4. Active icon pink/purple cosmic glow
+    assert.ok(foundationCss.includes('.drawer-nav-item.active .drawer-nav-icon'), 'Active item must style drawer-nav-icon')
+    assert.ok(foundationCss.includes('drop-shadow'), 'Active icon must use drop-shadow glow')
+
+    // 5. Smooth 200-400ms transitions
+    assert.ok(foundationCss.includes('0.28s') || foundationCss.includes('0.3s') || foundationCss.includes('0.32s') || foundationCss.includes('0.34s'), 'Transitions and animations must be within 200-400ms range')
+
+    // 6. Respects prefers-reduced-motion
+    assert.ok(foundationCss.includes('@media (prefers-reduced-motion: reduce)'), 'Must include prefers-reduced-motion media query')
+    assert.ok(foundationCss.includes('animation: none !important'), 'Reduced motion must disable animations')
+  })
+})
+
+describe('Part 3: Phase 2 Comprehensive UI, Theme and Navigation Verification', () => {
+  const appTsx = fs.readFileSync(path.resolve('src/App.tsx'), 'utf-8')
+  const layoutTsx = fs.readFileSync(path.resolve('src/components/IntegrationLayout.tsx'), 'utf-8')
+  const foundationCss = fs.readFileSync(path.resolve('src/components/integration-foundation.css'), 'utf-8')
+  const matchesCss = fs.readFileSync(path.resolve('src/styles/matches.css'), 'utf-8')
+  const matchesPagesTsx = fs.readFileSync(path.resolve('src/pages/MatchesPages.tsx'), 'utf-8')
+
+  it('all required application routes are registered under IntegrationLayout', () => {
+    const requiredRoutes = [
+      '/discover',
+      '/matches',
+      '/conversations',
+      '/profile',
+      '/settings',
+      '/privacy',
+      '/help',
+    ]
+    for (const route of requiredRoutes) {
+      assert.ok(appTsx.includes(`path="${route}"`), `App.tsx must register ${route}`)
+    }
+  })
+
+  it('no duplicate drawer backdrops exist in IntegrationLayout', () => {
+    const backdropMatches = layoutTsx.match(/className=\{`integration-drawer-backdrop/g)
+    assert.strictEqual(backdropMatches?.length, 1, 'must contain exactly one drawer backdrop')
+  })
+
+  it('scroll-lock engages when either drawer or logout dialog is active', () => {
+    assert.ok(layoutTsx.includes('if (drawerOpen || showLogoutConfirm)'), 'must lock scroll on drawerOpen or showLogoutConfirm')
+    assert.ok(layoutTsx.includes("document.body.style.overflow = 'hidden'"), 'must set overflow hidden')
+  })
+
+  it('matches.css eliminates hardcoded Zillennial amber from avatar rings and pills', () => {
+    assert.ok(!matchesCss.includes('border:2.5px solid var(--ring-color,#f59e0b)'), 'must not have hardcoded #f59e0b fallback for avatar ring')
+    assert.ok(!matchesCss.includes('box-shadow:0 0 12px rgba(245,158,11,.3)'), 'must use var(--glow) instead of hardcoded amber glow')
+    assert.ok(!matchesCss.includes('border:3px solid #f59e0b'), 'intro circle must not hardcode #f59e0b')
+    assert.ok(!matchesCss.includes('border:2px solid #f59e0b'), 'message partner ring must not hardcode #f59e0b')
+  })
+
+  it('Matches and Conversations pages feature distinct top headings', () => {
+    assert.ok(matchesPagesTsx.includes('{eraModeIcon} Matches'), 'MatchesPage must show Matches heading')
+    assert.ok(matchesPagesTsx.includes('{eraModeIcon} Chat'), 'ConversationsPage must show Chat heading to prevent duplicate copy')
+  })
+
+  it('backdrop in foundation CSS supports smooth blur transition and click-outside dismissal', () => {
+    assert.ok(foundationCss.includes('.integration-drawer-backdrop.visible'), 'must have .visible state for backdrop')
+    assert.ok(foundationCss.includes('backdrop-filter: blur'), 'backdrop must use backdrop-filter blur')
+  })
 })

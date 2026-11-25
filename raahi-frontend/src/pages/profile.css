@@ -175,7 +175,7 @@
   padding: 0;
   overflow: hidden;
   border: 0;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--ep) 45%, #151020), color-mix(in srgb, var(--es) 35%, #080711));
+  background: linear-gradient(145deg, color-mix(in srgb, var(--ep) 45%, var(--bg-mid)), color-mix(in srgb, var(--es) 35%, var(--bg-deep)));
   cursor: pointer;
 }
 
@@ -202,7 +202,7 @@
   padding: 7px 13px;
   border: 1px solid rgba(255, 255, 255, .28);
   border-radius: 999px;
-  background: rgba(8, 6, 18, .72);
+  background: color-mix(in srgb, var(--bg-deep) 72%, rgba(0, 0, 0, .3));
   color: #fff;
   font-size: .74rem;
   font-weight: 700;
@@ -601,7 +601,7 @@
   padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, .16);
   border-radius: 14px;
-  background: rgba(8, 6, 18, .58);
+  background: color-mix(in srgb, var(--bg-deep) 65%, rgba(0, 0, 0, .35));
   color: #fff;
   font-size: 15px;
   box-sizing: border-box;
@@ -617,7 +617,7 @@
 }
 
 .profile-field select option {
-  background: #171024;
+  background: var(--bg-mid);
   color: #fff;
 }
 

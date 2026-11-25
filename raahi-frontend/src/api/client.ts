@@ -46,6 +46,7 @@ export function setAuthToken(token: string) {
 export function clearAuthToken() {
   try {
     globalThis.localStorage?.removeItem(AUTH_TOKEN_KEY)
+    globalThis.localStorage?.removeItem('raahiDemoUserProfile.v1')
   } catch {
     // Keep logout usable when browser storage is disabled.
   }

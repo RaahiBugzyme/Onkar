@@ -296,6 +296,8 @@ def validate_minimum_age(value: str) -> str:
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     if age < AGE_MINIMUM:
         raise ValueError(f"User must be at least {AGE_MINIMUM} years old")
+    if age > 120:
+        raise ValueError("Invalid date_of_birth: age cannot exceed 120 years")
     return value
 
 
@@ -425,6 +427,11 @@ class ProfilePhotoResponse(BaseModel):
     display_order: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProfilePhotosReorderRequest(BaseModel):
+    """Request payload to reorder profile photos."""
+    photo_ids: list[int]
 
 
 class DatingProfileResponse(_FromOrm):
@@ -614,6 +621,17 @@ class BlockResponse(_FromOrm):
     id: int
     blocker_id: int
     blocked_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BlockedUserItem(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    full_name: str | None = None
+    photo_url: str | None = None
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

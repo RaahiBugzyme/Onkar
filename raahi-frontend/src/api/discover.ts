@@ -50,6 +50,16 @@ export interface SwipeResponse {
   action: 'like' | 'pass' | 'superlike'
   created_at: string
   is_match?: boolean
+  match?: {
+    id: number
+    chat_id: number
+    matched_user?: {
+      id: number
+      username: string
+      full_name?: string | null
+      bio?: string | null
+    }
+  } | null
 }
 
 export function fetchFeed(limit = 20, offset = 0) {

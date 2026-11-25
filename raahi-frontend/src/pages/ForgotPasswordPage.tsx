@@ -130,7 +130,7 @@ export function ForgotPasswordPage() {
                     onClick={() => setChosenMethod('otp')}
                     className={`recovery-method-option${chosenMethod === 'otp' ? ' selected' : ''}`}
                   >
-                    <span style={{ fontWeight: 800, fontSize: '.9rem', color: chosenMethod === 'otp' ? '#f28ac7' : '#fff' }}>
+                    <span style={{ fontWeight: 800, fontSize: '.9rem', color: chosenMethod === 'otp' ? 'color-mix(in srgb, var(--es) 78%, #ffffff)' : '#fff' }}>
                       ✉️ 6-Digit Email Code (Instant)
                     </span>
                     <span style={{ fontSize: '.78rem', color: 'rgba(255,255,255,.7)', marginTop: '3px' }}>
@@ -143,7 +143,7 @@ export function ForgotPasswordPage() {
                     onClick={() => setChosenMethod('link')}
                     className={`recovery-method-option${chosenMethod === 'link' ? ' selected' : ''}`}
                   >
-                    <span style={{ fontWeight: 800, fontSize: '.9rem', color: chosenMethod === 'link' ? '#f28ac7' : '#fff' }}>
+                    <span style={{ fontWeight: 800, fontSize: '.9rem', color: chosenMethod === 'link' ? 'color-mix(in srgb, var(--es) 78%, #ffffff)' : '#fff' }}>
                       🔗 Password Reset Link
                     </span>
                     <span style={{ fontSize: '.78rem', color: 'rgba(255,255,255,.7)', marginTop: '3px' }}>

@@ -75,8 +75,8 @@
   gap: 14px;
   padding: 16px 18px;
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(135deg, rgba(28, 14, 48, 0.85) 0%, rgba(14, 8, 26, 0.95) 100%);
+  border: 1px solid var(--cbr);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--bg-mid) 88%, transparent) 0%, color-mix(in srgb, var(--bg-deep) 95%, transparent) 100%);
   margin-bottom: 24px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(14px);
@@ -94,13 +94,21 @@
   height: 54px;
   border-radius: 50%;
   border: 2.5px solid var(--ep, #d83db4);
-  background: #150a28;
+  background: var(--bg-mid);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 18px rgba(216, 61, 180, 0.35);
+  box-shadow: 0 0 18px var(--glow);
   font-size: 1.7rem;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.settings-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .settings-user-name {
@@ -126,7 +134,7 @@
   gap: 5px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: linear-gradient(115deg, #d83db4 0%, #8b5cf6 100%);
+  background: var(--pink-purple);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #fff;
   font-size: 0.76rem;
@@ -139,7 +147,7 @@
 
 .settings-edit-pill:hover {
   transform: scale(1.05);
-  box-shadow: 0 0 14px rgba(216, 61, 180, 0.4);
+  box-shadow: 0 0 14px var(--glow);
 }
 
 /* Grouped List Sections */
@@ -160,7 +168,7 @@
 .settings-group-card {
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(175deg, rgba(22, 13, 38, 0.88), rgba(12, 6, 22, 0.94));
+  background: linear-gradient(175deg, color-mix(in srgb, var(--bg-mid) 88%, transparent), color-mix(in srgb, var(--bg-deep) 94%, transparent));
   overflow: hidden;
   backdrop-filter: blur(16px);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
@@ -348,9 +356,9 @@
 }
 
 .settings-switch input:checked + .settings-switch-slider {
-  background: linear-gradient(135deg, #d83db4, #8b5cf6);
+  background: var(--pink-purple);
   border-color: rgba(255, 255, 255, 0.25);
-  box-shadow: 0 0 12px rgba(216, 61, 180, 0.4);
+  box-shadow: 0 0 12px var(--glow);
 }
 
 .settings-switch input:checked + .settings-switch-slider::before {

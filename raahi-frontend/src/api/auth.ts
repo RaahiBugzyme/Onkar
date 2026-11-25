@@ -94,3 +94,9 @@ export function confirmPasswordResetLink(data: {
     body: JSON.stringify(data),
   })
 }
+
+export function deleteMyAccount() {
+  return apiRequest<{ deleted: boolean; user_id: number }>('/me', {
+    method: 'DELETE',
+  })
+}

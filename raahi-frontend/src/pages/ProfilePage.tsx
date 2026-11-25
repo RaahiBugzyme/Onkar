@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { Dialog } from '../components/Dialog'
 import { generationThemes, type GenerationId } from '../data/generations'
 import { matchEraOptions, type MatchEraId } from '../data/profiles'
+import { isDemoModeEnabled } from '../utils/demoEnvironment'
 import {
   blankProfileDraft,
   getProfileCompleteness,
@@ -20,9 +21,12 @@ import {
   createDatingProfile,
   uploadProfilePhoto,
   deleteProfilePhoto,
+  setPrimaryProfilePhoto,
+  reorderProfilePhotos,
   type DatingEra,
 } from '../api/datingProfile'
 import { resolveMediaUrl } from '../api/client'
+import { requestCurrentLocation } from '../utils/geolocation'
 import './profile.css'
 
 const MAX_PHOTOS = 4
@@ -126,8 +130,9 @@ export function ProfilePage() {
   const { user, updateUser } = useAuth()
   const { profile: backendProfile, refreshProfile } = useDatingProfile()
 
-  const [savedProfile, setSavedProfile] = useState<DemoUserProfile | null>(readDemoProfile)
-  const [draft, setDraft] = useState<DemoProfileDraft>(() => toDraft(readDemoProfile()))
+  const isDemo = !user && isDemoModeEnabled()
+  const [savedProfile, setSavedProfile] = useState<DemoUserProfile | null>(() => isDemo ? readDemoProfile() : null)
+  const [draft, setDraft] = useState<DemoProfileDraft>(() => toDraft(isDemo ? readDemoProfile() : null))
   const [errors, setErrors] = useState<FieldErrors>({})
   const [formMessage, setFormMessage] = useState('')
   const [interestInput, setInterestInput] = useState('')
@@ -135,6 +140,9 @@ export function ProfilePage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [isPublicPreview, setIsPublicPreview] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [detectingLocation, setDetectingLocation] = useState(false)
+  const [locationMessage, setLocationMessage] = useState('')
 
   const isEditing = location.pathname.endsWith('/create') || location.pathname.endsWith('/edit')
   const isCreating = location.pathname.endsWith('/create') || !savedProfile
@@ -149,33 +157,29 @@ export function ProfilePage() {
   // Populate profile from backend data if authenticated
   useEffect(() => {
     if (user || backendProfile) {
-      const fallback = readDemoProfile()
       const age = calculateAge(backendProfile?.date_of_birth)
-      const name = user?.full_name || user?.username || fallback?.name || 'Raahi member'
-      const city = backendProfile?.city || fallback?.city || 'Mumbai'
-      const era = (backendProfile?.era || fallback?.era || 'genz') as GenerationId
-      const bio = backendProfile?.bio ?? user?.bio ?? fallback?.bio ?? ''
-      const vibe = backendProfile?.vibe_tag || fallback?.vibe || 'Low-key exclusive'
-      const lookingFor = (backendProfile?.match_era_preference || fallback?.lookingFor || 'any') as MatchEraId
-      const profession = backendProfile?.profession ?? fallback?.profession ?? ''
-      const education = backendProfile?.education ?? fallback?.education ?? ''
-      const relationshipIntentions = backendProfile?.relationship_intentions ?? fallback?.relationshipIntentions ?? 'long_term'
+      const name = user?.full_name || user?.username || 'Raahi member'
+      const city = backendProfile?.city || ''
+      const era = (backendProfile?.era || 'genz') as GenerationId
+      const bio = backendProfile?.bio ?? user?.bio ?? ''
+      const vibe = backendProfile?.vibe_tag || 'Low-key exclusive'
+      const lookingFor = (backendProfile?.match_era_preference || 'any') as MatchEraId
+      const profession = backendProfile?.profession ?? ''
+      const education = backendProfile?.education ?? ''
+      const relationshipIntentions = backendProfile?.relationship_intentions ?? 'long_term'
       const interests = backendProfile?.interests && backendProfile.interests.length > 0
         ? backendProfile.interests
-        : (fallback?.interests ?? ['Indie Music', 'Night Walks', 'Coffee'])
+        : []
 
       let photos: string[] = []
       let photoIds: number[] = []
       if (backendProfile?.photos && backendProfile.photos.length > 0) {
         photos = backendProfile.photos.map(p => p.photo_url)
         photoIds = backendProfile.photos.map(p => p.id)
-      } else if (fallback?.photos && fallback.photos.length > 0) {
-        photos = [...fallback.photos]
-        photoIds = fallback.photoIds ? [...fallback.photoIds] : []
       }
 
       const merged: DemoUserProfile = {
-        id: String(user?.id ?? fallback?.id ?? 'demo-user-1'),
+        id: String(user?.id ?? 'real-user'),
         name,
         age,
         city,
@@ -189,15 +193,19 @@ export function ProfilePage() {
         interests,
         photos,
         photoIds,
-        verificationStatus: (backendProfile?.verification_status || fallback?.verificationStatus || 'not_verified') as any,
-        createdAt: backendProfile?.created_at || fallback?.createdAt || new Date().toISOString(),
-        updatedAt: backendProfile?.updated_at || fallback?.updatedAt || new Date().toISOString(),
+        verificationStatus: (backendProfile?.verification_status || 'not_verified') as any,
+        createdAt: backendProfile?.created_at || new Date().toISOString(),
+        updatedAt: backendProfile?.updated_at || new Date().toISOString(),
       }
 
       setSavedProfile(merged)
       setDraft(toDraft(merged))
+    } else if (isDemo) {
+      const demo = readDemoProfile()
+      setSavedProfile(demo)
+      setDraft(toDraft(demo))
     }
-  }, [user, backendProfile])
+  }, [user, backendProfile, isDemo])
 
   function updateField<K extends keyof DemoProfileDraft>(field: K, value: DemoProfileDraft[K]) {
     setDraft(previous => ({ ...previous, [field]: value }))
@@ -262,11 +270,17 @@ export function ProfilePage() {
 
     if (user) {
       try {
+        setUploadProgress(0)
         const newPhotos: string[] = []
         const newPhotoIds: number[] = []
-        for (const file of files) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i]
           try {
-            const uploaded = await uploadProfilePhoto(file, () => {})
+            const uploaded = await uploadProfilePhoto(file, (pct) => {
+              const fileWeight = 100 / files.length
+              const totalPct = Math.round(i * fileWeight + (pct * fileWeight) / 100)
+              setUploadProgress(Math.min(99, totalPct))
+            })
             newPhotos.push(uploaded.photo_url)
             newPhotoIds.push(uploaded.id)
           } catch {
@@ -274,6 +288,7 @@ export function ProfilePage() {
             newPhotos.push(dataUrl)
           }
         }
+        setUploadProgress(100)
         setDraft(prev => ({
           ...prev,
           photos: [...prev.photos, ...newPhotos],
@@ -285,6 +300,8 @@ export function ProfilePage() {
       } catch {
         setErrors(previous => ({ ...previous, photos: 'Could not upload photo. Try another file.' }))
         return
+      } finally {
+        setTimeout(() => setUploadProgress(null), 1000)
       }
     }
 
@@ -300,7 +317,7 @@ export function ProfilePage() {
   function removePhoto(index: number) {
     const photoId = draft.photoIds?.[index]
     if (photoId && user) {
-      void deleteProfilePhoto(photoId).catch(() => undefined)
+      void deleteProfilePhoto(photoId).then(() => refreshProfile()).catch(() => undefined)
     }
     setDraft(prev => ({
       ...prev,
@@ -308,6 +325,7 @@ export function ProfilePage() {
       photoIds: prev.photoIds ? prev.photoIds.filter((_, photoIndex) => photoIndex !== index) : [],
     }))
     setPreviewIndex(current => (current === index ? null : current !== null && current > index ? current - 1 : current))
+    showToast('Photo removed. 🗑')
   }
 
   function movePhoto(index: number, offset: -1 | 1) {
@@ -320,10 +338,14 @@ export function ProfilePage() {
       ;[photoIds[index], photoIds[nextIndex]] = [photoIds[nextIndex], photoIds[index]]
     }
     setDraft(prev => ({ ...prev, photos, photoIds: photoIds ?? prev.photoIds }))
+    if (user && photoIds && photoIds.every(id => typeof id === 'number')) {
+      void reorderProfilePhotos(photoIds).then(() => refreshProfile()).catch(() => undefined)
+    }
   }
 
   function setAsPrimary(index: number) {
     if (index === 0 || index >= draft.photos.length) return
+    const photoId = draft.photoIds?.[index]
     const photos = [...draft.photos]
     const [selected] = photos.splice(index, 1)
     photos.unshift(selected)
@@ -333,6 +355,9 @@ export function ProfilePage() {
       photoIds.unshift(selectedId)
     }
     setDraft(prev => ({ ...prev, photos, photoIds: photoIds ?? prev.photoIds }))
+    if (user && photoId) {
+      void setPrimaryProfilePhoto(photoId).then(() => refreshProfile()).catch(() => undefined)
+    }
     showToast('Updated primary photo! 🌟')
   }
 
@@ -391,14 +416,24 @@ export function ProfilePage() {
           })
         }
         await refreshProfile()
-      }
-
-      const updated = writeDemoProfile(
-        { ...draft, name: draft.name.trim(), city: draft.city.trim(), bio: draft.bio.trim() },
-        savedProfile
-      )
-      if (updated) {
-        setSavedProfile(updated)
+        setSavedProfile({
+          ...draft,
+          id: String(user.id),
+          name: draft.name.trim(),
+          city: draft.city.trim(),
+          bio: draft.bio.trim(),
+          verificationStatus: (backendProfile?.verification_status || 'not_verified') as any,
+          createdAt: backendProfile?.created_at || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      } else if (isDemo) {
+        const updated = writeDemoProfile(
+          { ...draft, name: draft.name.trim(), city: draft.city.trim(), bio: draft.bio.trim() },
+          savedProfile
+        )
+        if (updated) {
+          setSavedProfile(updated)
+        }
       }
       showToast('Profile updated successfully! ✨')
       navigate('/profile', { replace: true })
@@ -420,6 +455,9 @@ export function ProfilePage() {
 
   // VIEW PROFILE MODE
   if (!isEditing) {
+    const isOwner = Boolean(user && (!backendProfile || backendProfile.user_id === user.id))
+    const isVerified = Boolean((backendProfile?.is_face_verified && backendProfile?.is_id_verified) || backendProfile?.verification_status === 'verified')
+
     return (
       <section className="profile-page page-enter">
         {toastMessage && <div className="discover-feedback-toast" role="status">{toastMessage}</div>}
@@ -427,28 +465,71 @@ export function ProfilePage() {
         <div className="profile-heading-row fiu">
           <div>
             <p className="profile-eyebrow">RAAHI IDENTITY</p>
-            <h1>Profile</h1>
+            <h1>{isPublicPreview ? 'Public Profile Preview' : 'Profile'}</h1>
           </div>
           <div className="profile-heading-actions">
             <button
               type="button"
-              className="profile-button quiet"
+              className={`profile-button ${isPublicPreview ? 'primary' : 'quiet'}`}
               onClick={() => setIsPublicPreview(p => !p)}
             >
-              {isPublicPreview ? 'Exit Preview' : 'Preview Public Card 👁'}
+              {isPublicPreview ? 'Exit Preview ✕' : 'Preview Public Card 👁'}
             </button>
-            <button
-              type="button"
-              className="profile-button secondary"
-              onClick={() => navigate('/profile/edit')}
-            >
-              ✏️ Edit profile
-            </button>
-            <Link to="/settings" className="profile-button secondary">
-              <span aria-hidden="true">⚙</span> Settings
-            </Link>
+            {!isPublicPreview && isOwner && (
+              <>
+                <button
+                  type="button"
+                  className="profile-button secondary"
+                  onClick={() => navigate('/profile/edit')}
+                >
+                  ✏️ Edit profile
+                </button>
+                <Link to="/settings" className="profile-button secondary">
+                  <span aria-hidden="true">⚙</span> Settings
+                </Link>
+              </>
+            )}
           </div>
         </div>
+
+        {isPublicPreview && (
+          <div
+            className="public-preview-banner fiu"
+            role="status"
+            style={{
+              background: 'rgba(168,85,247,0.15)',
+              border: '1px solid rgba(168,85,247,0.3)',
+              borderRadius: 14,
+              padding: '12px 18px',
+              marginBottom: 16,
+              color: '#f3e8ff',
+              fontSize: '0.85rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+            }}
+          >
+            <span>
+              👁 <strong>Public Card View:</strong> This is exactly how other Raahi members see your profile in Discover. Edit and settings controls are hidden.
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsPublicPreview(false)}
+              style={{
+                background: 'rgba(255,255,255,0.12)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                color: '#ffffff',
+                borderRadius: 8,
+                padding: '4px 10px',
+                fontSize: '0.78rem',
+                cursor: 'pointer',
+              }}
+            >
+              Exit
+            </button>
+          </div>
+        )}
 
         <div className="profile-view-grid">
           {/* Main Profile Card */}
@@ -460,7 +541,13 @@ export function ProfilePage() {
                 onClick={() => setPreviewIndex(0)}
                 aria-label="Open profile photo gallery"
               >
-                <img src={resolveMediaUrl(viewProfile.photos[0])} alt={`${viewProfile.name}'s primary profile`} />
+                <img
+                  src={resolveMediaUrl(viewProfile.photos[0])}
+                  alt={`${viewProfile.name}'s primary profile`}
+                  onError={e => {
+                    e.currentTarget.src = generatePresetPortrait(viewProfile.name || 'Raahi', viewProfile.era)
+                  }}
+                />
                 <span className="profile-cover-count">
                   {viewProfile.photos.length} {viewProfile.photos.length === 1 ? 'photo' : 'photos'} · tap to view
                 </span>
@@ -473,6 +560,24 @@ export function ProfilePage() {
               <div className="profile-name-row">
                 <h2>
                   {viewProfile.name}, {viewProfile.age}
+                  {isVerified && (
+                    <span
+                      className="profile-verified-badge"
+                      title="Verified Identity"
+                      aria-label="Verified"
+                      style={{
+                        fontSize: '0.85rem',
+                        marginLeft: 8,
+                        color: '#4ade80',
+                        verticalAlign: 'middle',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      🛡️ <span style={{ fontSize: '0.72rem', fontWeight: 800 }}>VERIFIED</span>
+                    </span>
+                  )}
                 </h2>
                 <span
                   className="profile-era-pill"
@@ -545,7 +650,14 @@ export function ProfilePage() {
                     style={{ cursor: 'pointer', position: 'relative' }}
                     title="Tap to enlarge"
                   >
-                    <img className="profile-gallery-thumb" src={resolveMediaUrl(photo)} alt={`Gallery view ${idx + 1}`} />
+                    <img
+                      className="profile-gallery-thumb"
+                      src={resolveMediaUrl(photo)}
+                      alt={`Gallery view ${idx + 1}`}
+                      onError={e => {
+                        e.currentTarget.src = generatePresetPortrait(viewProfile.name || 'Raahi', viewProfile.era)
+                      }}
+                    />
                     {idx === 0 && (
                       <span
                         style={{
@@ -568,37 +680,41 @@ export function ProfilePage() {
               </div>
             </Card>
 
-            {/* Profile Completeness */}
-            <Card className="profile-view-card profile-completeness-card card-enter">
-              <div className="profile-section-title">
-                <h2>Profile completeness</h2>
-                <strong>{getProfileCompleteness(viewProfile)}%</strong>
-              </div>
-              <div
-                className="profile-progress-track"
-                role="progressbar"
-                aria-label="Profile completeness"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={getProfileCompleteness(viewProfile)}
-              >
-                <span style={{ width: `${getProfileCompleteness(viewProfile)}%` }} />
-              </div>
-              <p>Complete your details, add interests, and upload photos to get 100% profile alignment.</p>
-            </Card>
+            {!isPublicPreview && isOwner && (
+              <>
+                {/* Profile Completeness */}
+                <Card className="profile-view-card profile-completeness-card card-enter">
+                  <div className="profile-section-title">
+                    <h2>Profile completeness</h2>
+                    <strong>{getProfileCompleteness(viewProfile)}%</strong>
+                  </div>
+                  <div
+                    className="profile-progress-track"
+                    role="progressbar"
+                    aria-label="Profile completeness"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={getProfileCompleteness(viewProfile)}
+                  >
+                    <span style={{ width: `${getProfileCompleteness(viewProfile)}%` }} />
+                  </div>
+                  <p>Complete your details, add interests, and upload photos to get 100% profile alignment.</p>
+                </Card>
 
-            {/* Quick Settings Link */}
-            <Card className="profile-view-card card-enter">
-              <div className="profile-section-title">
-                <h2>Preferences & Settings</h2>
-              </div>
-              <p style={{ margin: '8px 0 16px', fontSize: '.82rem', color: 'rgba(255,255,255,.6)' }}>
-                Configure dark mode, AI chat memory consent, in-app notifications, and privacy options.
-              </p>
-              <Link to="/settings" className="profile-button primary" style={{ width: '100%' }}>
-                ⚙ Open Settings
-              </Link>
-            </Card>
+                {/* Quick Settings Link */}
+                <Card className="profile-view-card card-enter">
+                  <div className="profile-section-title">
+                    <h2>Preferences & Settings</h2>
+                  </div>
+                  <p style={{ margin: '8px 0 16px', fontSize: '.82rem', color: 'rgba(255,255,255,.6)' }}>
+                    Configure dark mode, AI chat memory consent, in-app notifications, and privacy options.
+                  </p>
+                  <Link to="/settings" className="profile-button primary" style={{ width: '100%' }}>
+                    ⚙ Open Settings
+                  </Link>
+                </Card>
+              </>
+            )}
           </aside>
         </div>
 
@@ -676,7 +792,13 @@ export function ProfilePage() {
                     onClick={() => setPreviewIndex(index)}
                     aria-label={`Preview photo ${index + 1}`}
                   >
-                    <img src={resolveMediaUrl(photo)} alt={`Profile photo ${index + 1}`} />
+                    <img
+                      src={resolveMediaUrl(photo)}
+                      alt={`Profile photo ${index + 1}`}
+                      onError={e => {
+                        e.currentTarget.src = generatePresetPortrait(draft.name || 'Raahi', draft.era)
+                      }}
+                    />
                   </button>
                   <div className="profile-photo-actions">
                     {index === 0 ? (
@@ -738,6 +860,17 @@ export function ProfilePage() {
                 </div>
               )}
             </div>
+            {uploadProgress !== null && (
+              <div className="profile-upload-progress" role="status" style={{ margin: '12px 0 6px', width: '100%' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#d8b4fe', marginBottom: 4 }}>
+                  <span>Uploading photo…</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div style={{ height: 6, width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${uploadProgress}%`, background: 'var(--ep, #d83db4)', transition: 'width 0.2s ease' }} />
+                </div>
+              </div>
+            )}
             {errors.photos && (
               <p className="profile-error" id="profile-photos-error" role="alert">
                 {errors.photos}
@@ -786,7 +919,36 @@ export function ProfilePage() {
               </label>
 
               <label className="profile-field" htmlFor="profile-city">
-                <span>City</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>City</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setDetectingLocation(true)
+                      setLocationMessage('')
+                      const res = await requestCurrentLocation()
+                      setDetectingLocation(false)
+                      if (res.city) {
+                        updateField('city', res.city)
+                        setLocationMessage(`📍 Detected ${res.city}`)
+                      } else if (res.error) {
+                        setLocationMessage(res.error)
+                      }
+                    }}
+                    disabled={detectingLocation}
+                    style={{
+                      background: 'rgba(168,85,247,0.18)',
+                      border: '1px solid rgba(168,85,247,0.35)',
+                      color: '#f3e8ff',
+                      fontSize: '0.74rem',
+                      padding: '2px 8px',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {detectingLocation ? 'Detecting…' : '📍 Detect location'}
+                  </button>
+                </div>
                 <input
                   id="profile-city"
                   autoComplete="address-level2"
@@ -796,6 +958,14 @@ export function ProfilePage() {
                   placeholder="Mumbai, Delhi, Bengaluru…"
                   aria-invalid={Boolean(errors.city)}
                 />
+                <small style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', marginTop: 2, display: 'block' }}>
+                  Used to find nearby matches. Exact coordinates are never shared.
+                </small>
+                {locationMessage && (
+                  <small style={{ fontSize: '0.74rem', color: locationMessage.startsWith('📍') ? '#4ade80' : '#fca5a5', marginTop: 2, display: 'block' }}>
+                    {locationMessage}
+                  </small>
+                )}
                 {errors.city && <small className="profile-error">{errors.city}</small>}
               </label>
 

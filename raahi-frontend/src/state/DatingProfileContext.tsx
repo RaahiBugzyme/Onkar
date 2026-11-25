@@ -47,8 +47,9 @@ export function DatingProfileProvider({ children }: { children: ReactNode }) {
       setError(null)
       return
     }
+    setProfile(null)
     void refreshProfile().catch(() => undefined)
-  }, [authLoading, user, refreshProfile])
+  }, [authLoading, user?.id, refreshProfile])
 
   const value = useMemo(() => ({ profile, loading: authLoading || loading, error, refreshProfile, setProfile }), [profile, authLoading, loading, error, refreshProfile])
   return <DatingProfileContext.Provider value={value}>{children}</DatingProfileContext.Provider>

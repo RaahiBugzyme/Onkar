@@ -58,6 +58,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     rootStyle.setProperty('--era-bg', curTheme.cardBackground)
     rootStyle.setProperty('--ring-color', curTheme.primary)
     document.body.style.backgroundColor = curTheme.background
+
+    // Update meta theme-color for mobile browser header chrome
+    const metaThemeColor = document.querySelector('meta[name="theme-color"]')
+    if (metaThemeColor) {
+      metaThemeColor.setAttribute('content', curTheme.background)
+    }
   }, [generation])
 
   return (

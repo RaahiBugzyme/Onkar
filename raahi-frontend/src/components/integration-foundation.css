@@ -26,12 +26,11 @@
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  max-width: 1240px;
+  box-sizing: border-box;
   min-height: 68px;
-  margin: 0 auto;
   padding: 0 24px;
   border-bottom: 1px solid var(--integration-border);
-  background: rgba(10, 6, 24, 0.85);
+  background: color-mix(in srgb, var(--bg-deep) 85%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -46,7 +45,13 @@
 }
 .integration-brand span { margin-left: 7px; color: var(--ep); font: 700 1rem 'Nunito', sans-serif; }
 
-/* ── Minimal Header: Hamburger Button ── */
+/* ── Minimal Header: Hamburger Button & Anchor Wrap ── */
+.integration-menu-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .integration-hamburger-btn {
   display: flex;
   flex-direction: column;
@@ -79,20 +84,21 @@
   height: 2px;
   border-radius: 2px;
   background: #fff;
+  pointer-events: none;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
-/* ── Navigation Drawer Backdrop ── */
+/* ── Floating Navigation Glass Panel (Replaces full-screen drawer) ── */
 .integration-drawer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 900;
-  background: rgba(4, 2, 10, 0.65);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  z-index: 940;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.28s ease;
+  transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .integration-drawer-backdrop.visible {
@@ -100,100 +106,141 @@
   pointer-events: auto;
 }
 
-/* ── Slide-In Navigation Drawer ── */
+/* Compact Floating Glass Panel anchored below hamburger button */
 .integration-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 901;
+  top: 74px;
+  right: 24px;
+  z-index: 950;
   display: flex;
   flex-direction: column;
-  width: min(86vw, 360px);
-  padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 24px);
-  background: linear-gradient(165deg, color-mix(in srgb, var(--cbg) 92%, #120924), var(--bd));
-  border-left: 1px solid var(--cbr);
-  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6), 0 0 50px color-mix(in srgb, var(--glow) 35%, transparent);
-  transform: translateX(100%);
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  max-height: min(78vh, 520px);
+  padding: 14px 12px 18px;
+  background: linear-gradient(165deg, color-mix(in srgb, var(--bg-mid) 95%, transparent) 0%, color-mix(in srgb, var(--bg-deep) 98%, transparent) 100%);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid color-mix(in srgb, var(--cbr, rgba(168, 85, 247, 0.35)) 60%, rgba(255, 255, 255, 0.16));
+  border-radius: 20px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 35px color-mix(in srgb, var(--glow, rgba(168, 85, 247, 0.35)) 30%, transparent);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-8px) scale(0.96);
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.2s;
   overflow-y: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ep) 45%, transparent) transparent;
+}
+
+.integration-drawer::-webkit-scrollbar {
+  width: 5px;
+}
+
+.integration-drawer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.integration-drawer::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ep) 40%, transparent);
+  border-radius: 999px;
+}
+
+.integration-drawer::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--es) 65%, transparent);
 }
 
 .integration-drawer.open {
-  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
 }
 
 .integration-drawer-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--integration-border);
+  margin-bottom: 10px;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.integration-drawer-tag {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ep);
+  font-family: 'Nunito', sans-serif;
 }
 
 .integration-drawer-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  border: 1px solid var(--integration-border);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  font-size: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.82rem;
   cursor: pointer;
   transition: all 0.18s ease;
 }
 
 .integration-drawer-close:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.16);
   border-color: var(--ep);
+  color: #fff;
   transform: rotate(90deg);
 }
 
 .integration-drawer-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .drawer-section {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .drawer-section-heading {
-  padding: 8px 12px 4px;
-  font-size: 0.72rem;
+  padding: 6px 10px 2px;
+  font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.42);
 }
 
 .drawer-divider {
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 10px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  margin: 6px 2px;
 }
 
 .drawer-nav-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 13px 18px;
-  border-radius: 16px;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 12px;
   border: 1px solid transparent;
   background: transparent;
   text-decoration: none;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.92rem;
   font-weight: 700;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
 }
 
@@ -206,21 +253,131 @@ button.drawer-nav-item {
 
 .drawer-nav-item:hover {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.14);
   color: #fff;
-  transform: translateX(3px);
+  transform: translateX(2px);
 }
 
 .drawer-nav-item.active {
   background: linear-gradient(115deg, color-mix(in srgb, var(--ep) 28%, transparent), color-mix(in srgb, var(--es) 18%, transparent));
   border-color: color-mix(in srgb, var(--ep) 60%, var(--es) 40%);
   color: #fff;
-  box-shadow: 0 4px 20px color-mix(in srgb, var(--glow) 35%, transparent), 0 0 10px color-mix(in srgb, var(--ep) 25%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--glow) 35%, transparent), 0 0 8px color-mix(in srgb, var(--ep) 25%, transparent);
 }
 
 .drawer-nav-icon {
-  font-size: 1.3rem;
+  font-size: 1.15rem;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), filter 0.28s ease;
+  will-change: transform, filter;
+}
+
+/* ── Active Navigation Icon Pink/Purple Cosmic Glow ── */
+.drawer-nav-item.active .drawer-nav-icon {
+  filter: drop-shadow(0 0 6px rgba(216, 61, 180, 0.72)) drop-shadow(0 0 10px rgba(139, 92, 246, 0.42));
+  transform: scale(1.08);
+}
+
+/* ── 1. Discover: Gentle rotation / compass needle tilt (320ms) ── */
+@keyframes nav-compass-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(-22deg) scale(1.18); }
+  100% { transform: rotate(18deg) scale(1.12); }
+}
+.drawer-nav-item:hover .icon-discover,
+.drawer-nav-item:active .icon-discover,
+.drawer-nav-item:focus-visible .icon-discover {
+  animation: nav-compass-spin 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── 2. Matches: Heartbeat pulse & warm neon pink glow (340ms) ── */
+@keyframes nav-heartbeat {
+  0% { transform: scale(1); }
+  28% { transform: scale(1.22); filter: drop-shadow(0 0 8px rgba(244, 82, 122, 0.8)); }
+  52% { transform: scale(1.06); }
+  78% { transform: scale(1.2); filter: drop-shadow(0 0 10px rgba(216, 61, 180, 0.85)); }
+  100% { transform: scale(1.12); filter: drop-shadow(0 0 6px rgba(244, 82, 122, 0.6)); }
+}
+.drawer-nav-item:hover .icon-matches,
+.drawer-nav-item:active .icon-matches,
+.drawer-nav-item:focus-visible .icon-matches {
+  animation: nav-heartbeat 0.34s ease-in-out both;
+}
+
+/* ── 3. Chat: Playful spring bounce (300ms) ── */
+@keyframes nav-chat-bounce {
+  0% { transform: translateY(0) scale(1); }
+  40% { transform: translateY(-4px) scale(1.14); }
+  70% { transform: translateY(1px) scale(1.06); }
+  100% { transform: translateY(-2px) scale(1.1); }
+}
+.drawer-nav-item:hover .icon-chat,
+.drawer-nav-item:active .icon-chat,
+.drawer-nav-item:focus-visible .icon-chat {
+  animation: nav-chat-bounce 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── 4. Profiles: Smooth elevation lift and scale (280ms) ── */
+@keyframes nav-profile-lift {
+  0% { transform: translateY(0) scale(1); }
+  55% { transform: translateY(-3px) scale(1.16); filter: drop-shadow(0 2px 8px rgba(139, 92, 246, 0.5)); }
+  100% { transform: translateY(-2px) scale(1.12); filter: drop-shadow(0 2px 6px rgba(139, 92, 246, 0.4)); }
+}
+.drawer-nav-item:hover .icon-profiles,
+.drawer-nav-item:active .icon-profiles,
+.drawer-nav-item:focus-visible .icon-profiles {
+  animation: nav-profile-lift 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── 5. Settings: Mechanical 90° rotation (320ms) ── */
+@keyframes nav-gear-rotate {
+  0% { transform: rotate(0deg) scale(1); }
+  100% { transform: rotate(90deg) scale(1.14); }
+}
+.drawer-nav-item:hover .icon-settings,
+.drawer-nav-item:active .icon-settings,
+.drawer-nav-item:focus-visible .icon-settings {
+  animation: nav-gear-rotate 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── 6. Privacy & Safety: Protective shield pulse & glow (320ms) ── */
+@keyframes nav-shield-protect {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.18); filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.7)) drop-shadow(0 0 6px rgba(139, 92, 246, 0.6)); }
+  100% { transform: scale(1.12); filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.5)); }
+}
+.drawer-nav-item:hover .icon-privacy,
+.drawer-nav-item:active .icon-privacy,
+.drawer-nav-item:focus-visible .icon-privacy {
+  animation: nav-shield-protect 0.32s ease-in-out both;
+}
+
+/* ── 7. Help & Support: Gentle lifebuoy rocking float (340ms) ── */
+@keyframes nav-buoy-float {
+  0% { transform: rotate(0deg) translateY(0) scale(1); }
+  35% { transform: rotate(-16deg) translateY(-3px) scale(1.14); }
+  70% { transform: rotate(14deg) translateY(1px) scale(1.08); }
+  100% { transform: rotate(-6deg) translateY(-2px) scale(1.1); }
+}
+.drawer-nav-item:hover .icon-help,
+.drawer-nav-item:active .icon-help,
+.drawer-nav-item:focus-visible .icon-help {
+  animation: nav-buoy-float 0.34s ease-in-out both;
+}
+
+/* ── 8. Logout: Smooth exit slide & red accent glow (280ms) ── */
+@keyframes nav-door-exit {
+  0% { transform: translateX(0) scale(1); }
+  55% { transform: translateX(4px) scale(1.15); filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.7)); }
+  100% { transform: translateX(3px) scale(1.12); filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.5)); }
+}
+.drawer-nav-item:hover .icon-logout,
+.drawer-nav-item:active .icon-logout,
+.drawer-nav-item:focus-visible .icon-logout {
+  animation: nav-door-exit 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .drawer-nav-label {
@@ -228,13 +385,13 @@ button.drawer-nav-item {
 }
 
 .drawer-nav-arrow {
-  font-size: 1.1rem;
-  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.3);
   transition: transform 0.2s ease, color 0.2s ease;
 }
 
 .drawer-nav-item:hover .drawer-nav-arrow {
-  transform: translateX(4px);
+  transform: translateX(3px);
   color: var(--ep);
 }
 
@@ -245,8 +402,8 @@ button.drawer-nav-item {
 
 /* ── Logout Action (Red/Pink Accent) ── */
 .drawer-account-section {
-  margin-top: auto;
-  padding-top: 4px;
+  padding-top: 2px;
+  padding-bottom: 6px;
 }
 
 .drawer-logout-item {
@@ -282,7 +439,7 @@ button.drawer-nav-item {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(4, 2, 12, 0.75);
+  background: color-mix(in srgb, var(--bg-deep) 78%, rgba(0, 0, 0, 0.45));
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   animation: fadeIn 0.2s ease both;
@@ -295,7 +452,7 @@ button.drawer-nav-item {
   padding: 30px 24px 26px;
   border-radius: 24px;
   border: 1px solid var(--cbr);
-  background: linear-gradient(165deg, color-mix(in srgb, var(--cbg) 85%, #180c2c), var(--bd));
+  background: linear-gradient(165deg, color-mix(in srgb, var(--cbg) 85%, var(--bg-mid)), var(--bd));
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7), 0 0 35px var(--glow);
   text-align: center;
   animation: card-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -378,21 +535,52 @@ button.drawer-nav-item {
   width: 100%;
   padding: clamp(24px, 5vh, 48px) 24px 64px;
 }
+@media (min-width: 1024px) {
+  .integration-main.integration-main-discover,
+  .integration-main:has(.discover-page) {
+    padding-top: clamp(6px, 1.2vh, 12px);
+    padding-bottom: clamp(8px, 1.4vh, 16px);
+  }
+}
+@media (max-width: 1023px) {
+  .integration-main.integration-main-discover,
+  .integration-main:has(.discover-page) {
+    padding-top: 8px;
+    padding-bottom: 12px;
+  }
+}
 .conversation-layout-mode {
   height: 100vh;
   height: 100svh;
   height: 100dvh;
   overflow: hidden;
 }
-.conversation-layout-mode .integration-main {
-  padding: 10px 14px 16px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  max-height: 100dvh;
-  box-sizing: border-box;
-  overflow: hidden;
+@media (max-width: 1023px) {
+  .conversation-layout-mode .integration-header {
+    display: none;
+  }
+  .conversation-layout-mode .integration-main {
+    padding: 10px 14px 16px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    max-height: 100dvh;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+}
+@media (min-width: 1024px) {
+  .conversation-layout-mode .integration-main {
+    padding: 12px 24px 20px;
+    height: calc(100vh - 66px);
+    max-height: calc(100vh - 66px);
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
 }
 .integration-page-container { width: min(100%, 1120px); margin-inline: auto; }
 .integration-page-container.reading { max-width: 720px; }
@@ -445,8 +633,25 @@ button.drawer-nav-item {
   .integration-brand { font-size: 1.55rem; }
   .integration-main { padding: 20px 16px 40px; }
   .integration-placeholder-card { margin: 4vh auto; border-radius: 22px; }
+  .integration-drawer {
+    top: 66px;
+    right: 16px;
+    width: min(300px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: min(78vh, calc(100dvh - 84px));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .integration-root *, .integration-root *::before, .integration-root *::after { scroll-behavior: auto !important; }
+  .drawer-nav-icon,
+  .drawer-nav-item:hover .drawer-nav-icon,
+  .drawer-nav-item:active .drawer-nav-icon,
+  .drawer-nav-item:focus-visible .drawer-nav-icon,
+  .drawer-nav-item.active .drawer-nav-icon {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
 }

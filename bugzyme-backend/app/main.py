@@ -74,12 +74,22 @@ if len(SECRET_KEY) < 32:
 ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = int(os.getenv("TOKEN_TTL_HOURS", "24"))
 
-ALLOWED_ORIGINS = [
+PRODUCTION_MODE = os.getenv("RAAHI_ENVIRONMENT", "development").strip().lower() == "production"
+
+_raw_origins = [
     o.strip()
     for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")
     if o.strip()
 ]
-PRODUCTION_MODE = os.getenv("RAAHI_ENVIRONMENT", "development").strip().lower() == "production"
+ALLOWED_ORIGINS = []
+for origin in _raw_origins:
+    ALLOWED_ORIGINS.append(origin)
+    if not PRODUCTION_MODE:
+        if origin.startswith("http://localhost:"):
+            ALLOWED_ORIGINS.append(origin.replace("http://localhost:", "http://127.0.0.1:"))
+        elif origin.startswith("http://127.0.0.1:"):
+            ALLOWED_ORIGINS.append(origin.replace("http://127.0.0.1:", "http://localhost:"))
+ALLOWED_ORIGINS = sorted(list(dict.fromkeys(ALLOWED_ORIGINS)))
 
 IDLE_TIMEOUT = 70
 ALLOWED_MESSAGE_REACTIONS = frozenset({"❤️", "😂", "👍", "🔥", "😮", "😢"})
@@ -2116,10 +2126,15 @@ def get_legacy_voice_content(
     response_model=schemas.Token
 )
 def login_user(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    from app.services import account_security
+
     email = form_data.username.strip().lower()
+    client_ip = request.client.host if request.client else "unknown"
+    account_security.enforce_login_rate_limit(email, client_ip)
 
     user = db.query(models.User).filter(
         func.lower(models.User.email) == email
@@ -2132,11 +2147,13 @@ def login_user(
             user.hashed_password
         )
     ):
+        account_security.record_login_failure(email, client_ip)
         raise HTTPException(
             401,
             "Invalid email or password"
         )
 
+    account_security.clear_login_failures(email, client_ip)
     return {
         "access_token": create_token(user.id),
         "token_type": "bearer"
@@ -2649,6 +2666,34 @@ async def update_presence_preference(
         "is_online": visible_online,
         "last_seen": current_user.last_seen,
     }
+
+
+@app.delete("/me")
+async def delete_my_account(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete the authenticated user's account and all dependent records."""
+    from app.services import account_security
+
+    user_id = current_user.id
+    partners = get_partners(db, user_id)
+    result = account_security.delete_user_account_data(
+        db,
+        current_user,
+        upload_profiles_dir=UPLOAD_PROFILES_DIR,
+        verification_storage_module=verification_storage,
+        attachment_storage_obj=attachment_storage,
+    )
+    if manager.is_online(user_id):
+        await broadcast_presence(
+            user_id,
+            "offline",
+            iso(utcnow()),
+            False,
+            partners=partners,
+        )
+    return result
 
 
 @app.get("/me/ai-memories", response_model=list[schemas.UserMemoryResponse])
@@ -4089,15 +4134,19 @@ def _profile_age(profile: models.UserProfile, today: date | None = None) -> int 
 
 
 def _is_discoverable_profile(profile: models.UserProfile | None) -> bool:
-    """Return whether the profile meets server-side discovery requirements."""
+    """Return whether the profile meets server-side discovery requirements.
+
+    A profile is discoverable when it belongs to an adult user with a valid
+    date of birth.  Face and ID verification remain visible as trust badges
+    but are **not** hard gates for appearing in the feed – new users must be
+    able to browse and be browsed immediately after completing their dating
+    profile so the product has a healthy candidate pool.
+    """
     age = _profile_age(profile) if profile else None
     return bool(
         profile
         and age is not None
         and age >= schemas.AGE_MINIMUM
-        and profile.is_face_verified
-        and profile.is_id_verified
-        and profile.verification_status == "verified"
     )
 
 
@@ -4138,6 +4187,11 @@ def _has_block_between(db: Session, first_user_id: int, second_user_id: int) -> 
 
 
 def _require_verified_profile(db: Session, user_id: int) -> models.UserProfile:
+    """Ensure the user has a discoverable dating profile.
+
+    Discovery now only requires the profile to exist and belong to an adult.
+    Face/ID verification is surfaced as a trust badge, not a hard access gate.
+    """
     profile = db.query(models.UserProfile).filter(
         models.UserProfile.user_id == user_id
     ).first()
@@ -4146,7 +4200,7 @@ def _require_verified_profile(db: Session, user_id: int) -> models.UserProfile:
     if not _is_discoverable_profile(profile):
         raise HTTPException(
             status_code=403,
-            detail="Verification required: Both face and ID verification must be approved before accessing discovery.",
+            detail="Your dating profile is incomplete. Please ensure your date of birth is set and you are at least 18.",
         )
     return profile
 
@@ -4531,8 +4585,8 @@ async def upload_profile_photo(
         raise HTTPException(400, "File too large. Maximum size is 10MB")
 
     # Validate file signature (magic numbers)
-    # Read first 8 bytes for signature detection
-    header = content[:8]
+    # Read first 16 bytes for signature detection (WebP requires 12 bytes: RIFF....WEBP)
+    header = content[:16]
     is_valid_image = False
     mime_type = None
 
@@ -4540,21 +4594,21 @@ async def upload_profile_photo(
     # JPEG: FF D8 FF
     # WEBP: 52 49 46 46 XX XX XX XX 57 45 42 50
     # GIF: 47 49 46 38
-    # AVIF: 61 76 69 66
+    # AVIF: ftyp box at offset 0 or offset 4
 
-    if header[:8] == b'\x89PNG\r\n\x1a\n':
+    if len(header) >= 8 and header[:8] == b'\x89PNG\r\n\x1a\n':
         is_valid_image = True
         mime_type = "image/png"
-    elif header[:3] == b'\xff\xd8\xff':
+    elif len(header) >= 3 and header[:3] == b'\xff\xd8\xff':
         is_valid_image = True
         mime_type = "image/jpeg"
-    elif header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+    elif len(header) >= 12 and header[:4] == b'RIFF' and header[8:12] == b'WEBP':
         is_valid_image = True
         mime_type = "image/webp"
-    elif header[:6] in (b'gif87a', b'gif89a'):
+    elif len(header) >= 6 and header[:6].lower() in (b'gif87a', b'gif89a'):
         is_valid_image = True
         mime_type = "image/gif"
-    elif header[:4] == b'ftyp':
+    elif (len(header) >= 8 and header[4:8] == b'ftyp') or (len(header) >= 4 and header[:4] == b'ftyp'):
         is_valid_image = True
         mime_type = "image/avif"
 
@@ -4562,9 +4616,17 @@ async def upload_profile_photo(
         await file.close()
         raise HTTPException(400, "Invalid file. Only PNG, JPEG, WEBP, GIF, and AVIF images are allowed")
 
-    # Generate storage key
+    # Generate storage key & safe extension
     storage_key = f"profile_{uuid_module.uuid4().hex[:16]}"
-    ext = Path(file.filename or "image").suffix.lower() or ".png"
+    ext_map = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/avif": ".avif"
+    }
+    user_ext = Path(file.filename or "").suffix.lower()
+    ext = user_ext if user_ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif') else ext_map.get(mime_type, ".png")
     photo_filename = f"{storage_key}{ext}"
     actual_path = UPLOAD_PROFILES_DIR / photo_filename
 
@@ -4627,6 +4689,111 @@ def list_profile_photos(
     } for photo in photos]
 
 
+@app.put(
+    "/api/v1/profile/photos/{photo_id}/primary",
+    response_model=schemas.ProfilePhotoResponse
+)
+def set_primary_profile_photo(
+    photo_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Set a photo as the primary profile picture."""
+    profile = db.query(models.UserProfile).filter(
+        models.UserProfile.user_id == current_user.id
+    ).first()
+
+    if not profile:
+        raise HTTPException(404, "Dating profile not found")
+
+    target_photo = db.query(models.ProfilePhoto).filter(
+        models.ProfilePhoto.id == photo_id,
+        models.ProfilePhoto.profile_id == profile.id
+    ).first()
+
+    if not target_photo:
+        raise HTTPException(404, "Photo not found or access denied")
+
+    all_photos = db.query(models.ProfilePhoto).filter(
+        models.ProfilePhoto.profile_id == profile.id
+    ).order_by(models.ProfilePhoto.display_order).all()
+
+    target_photo.is_primary = True
+    target_photo.display_order = 1
+
+    current_order = 2
+    for p in all_photos:
+        if p.id != target_photo.id:
+            p.is_primary = False
+            p.display_order = current_order
+            current_order += 1
+
+    db.commit()
+    db.refresh(target_photo)
+
+    return schemas.ProfilePhotoResponse(
+        id=target_photo.id,
+        photo_url=target_photo.photo_url,
+        is_primary=target_photo.is_primary,
+        display_order=target_photo.display_order
+    )
+
+
+@app.put(
+    "/api/v1/profile/photos/reorder",
+    response_model=list[schemas.ProfilePhotoResponse]
+)
+def reorder_profile_photos(
+    payload: schemas.ProfilePhotosReorderRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reorder profile photos according to the given photo_ids order."""
+    profile = db.query(models.UserProfile).filter(
+        models.UserProfile.user_id == current_user.id
+    ).first()
+
+    if not profile:
+        raise HTTPException(404, "Dating profile not found")
+
+    user_photos = {
+        p.id: p for p in db.query(models.ProfilePhoto).filter(
+            models.ProfilePhoto.profile_id == profile.id
+        ).all()
+    }
+
+    for pid in payload.photo_ids:
+        if pid not in user_photos:
+            raise HTTPException(400, f"Invalid photo ID: {pid}")
+
+    for idx, pid in enumerate(payload.photo_ids):
+        photo = user_photos[pid]
+        photo.display_order = idx + 1
+        photo.is_primary = (idx == 0)
+
+    remaining_order = len(payload.photo_ids) + 1
+    for pid, photo in user_photos.items():
+        if pid not in payload.photo_ids:
+            photo.display_order = remaining_order
+            photo.is_primary = False
+            remaining_order += 1
+
+    db.commit()
+
+    updated = db.query(models.ProfilePhoto).filter(
+        models.ProfilePhoto.profile_id == profile.id
+    ).order_by(models.ProfilePhoto.display_order).all()
+
+    return [
+        schemas.ProfilePhotoResponse(
+            id=p.id,
+            photo_url=p.photo_url,
+            is_primary=p.is_primary,
+            display_order=p.display_order
+        ) for p in updated
+    ]
+
+
 @app.delete("/api/v1/profile/photos/{photo_id}")
 def delete_profile_photo(
     photo_id: int,
@@ -4650,6 +4817,8 @@ def delete_profile_photo(
     if not photo:
         raise HTTPException(404, "Photo not found or access denied")
 
+    was_primary = photo.is_primary
+
     # Delete file safely if exists on disk
     file_name = os.path.basename(photo.photo_url)
     disk_path = UPLOAD_PROFILES_DIR / file_name
@@ -4667,6 +4836,15 @@ def delete_profile_photo(
 
     db.delete(photo)
     db.commit()
+
+    if was_primary:
+        # Promote the first remaining photo to primary
+        remaining = db.query(models.ProfilePhoto).filter(
+            models.ProfilePhoto.profile_id == profile.id
+        ).order_by(models.ProfilePhoto.display_order).first()
+        if remaining:
+            remaining.is_primary = True
+            db.commit()
 
     return {"deleted": True}
 
@@ -5568,6 +5746,41 @@ def block_user(
     return db_block
 
 
+@app.get(
+    "/api/v1/blocks",
+    response_model=list[schemas.BlockedUserItem]
+)
+def get_blocked_users(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List users blocked by the current user."""
+    blocks = (
+        db.query(models.UserBlock, models.User, models.UserProfile)
+        .join(models.User, models.User.id == models.UserBlock.blocked_id)
+        .outerjoin(models.UserProfile, models.UserProfile.user_id == models.UserBlock.blocked_id)
+        .options(selectinload(models.UserProfile.photos))
+        .filter(models.UserBlock.blocker_id == current_user.id)
+        .order_by(models.UserBlock.created_at.desc())
+        .all()
+    )
+    result = []
+    for block, user, profile in blocks:
+        primary_photo = None
+        if profile and profile.photos:
+            primary = next((p.photo_url for p in profile.photos if p.is_primary), None)
+            primary_photo = primary or profile.photos[0].photo_url
+        result.append({
+            "id": block.id,
+            "user_id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "photo_url": primary_photo,
+            "created_at": block.created_at,
+        })
+    return result
+
+
 @app.delete("/api/v1/blocks/{blocked_id}")
 def unblock_user(
     blocked_id: int,
@@ -5883,12 +6096,11 @@ def _feed_eligibility_filters(profile: models.UserProfile, today: date) -> list[
     except ValueError:  # Feb 29: matches the existing age calculation's calendar comparison.
         adult_birthdate_cutoff = date(today.year - schemas.AGE_MINIMUM, 2, 28)
 
+    # Adult age gate is the only hard requirement.  Verification and photo
+    # presence are surfaced as trust indicators but do not exclude profiles
+    # from the feed – this keeps the candidate pool viable for new users.
     filters = [
         models.UserProfile.date_of_birth <= adult_birthdate_cutoff,
-        models.UserProfile.is_face_verified.is_(True),
-        models.UserProfile.is_id_verified.is_(True),
-        models.UserProfile.verification_status == "verified",
-        exists(select(models.ProfilePhoto.id).where(models.ProfilePhoto.profile_id == models.UserProfile.id)),
     ]
 
     own_gender_preference = profile.target_gender_preference or "any"

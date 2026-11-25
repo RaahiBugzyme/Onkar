@@ -1,17 +1,50 @@
 /**
  * Safe Demo Mode Environment Utility
  *
- * Critical Safety Constraints:
- * 1. Demo profiles are strictly isolated and never written to the production database.
- * 2. Ordinary real users in production NEVER see demo profiles.
- * 3. Demo mode is only activated when explicitly requested via:
+ * Strict Isolation Rules:
+ * 1. Authenticated user sessions must NEVER show demo profiles under any circumstances.
+ *    If an active authentication token exists, demo mode is unconditionally disabled.
+ * 2. Production builds cannot enable demo mode through URL parameters or stale localStorage flags.
+ *    Only dedicated demo builds (VITE_ENABLE_DEMO_MODE === 'true') can activate demo mode in production.
+ * 3. In non-production environments, demo mode is only active when explicitly requested via:
  *    - URL parameter `?demo=true` or `?demo=1`
  *    - localStorage item `raahi.demo_mode === 'true'`
- *    - Environment variable `VITE_ENABLE_DEMO_MODE === 'true'`
+ *    AND the user is NOT authenticated.
+ * 4. Stale localStorage flags never override an active authenticated session.
+ * 5. Expired tokens redirect to login and never silently activate demo mode.
  */
 
 export function isDemoModeEnabled(): boolean {
-  // 1. Explicit URL parameter check (?demo=true / ?demo=1)
+  // CRITICAL RULE 1: If user has an active auth token in storage, demo mode is ALWAYS disabled.
+  // Normal authenticated sessions must NEVER be overridden by URL params or stale demo flags.
+  try {
+    const storage = typeof window !== 'undefined' ? window.localStorage : globalThis.localStorage
+    const hasAuthToken = Boolean(storage?.getItem('raahi.authToken.v1'))
+    if (hasAuthToken) {
+      if (storage?.getItem('raahi.demo_mode')) {
+        storage.removeItem('raahi.demo_mode')
+      }
+      return false
+    }
+  } catch {
+    // localStorage may be disabled or unavailable
+  }
+
+  // CRITICAL RULE 2: Production builds cannot enable demo mode through URL parameters or stale localStorage flags.
+  // Only dedicated demo builds (VITE_ENABLE_DEMO_MODE === 'true') may run demo mode in production.
+  const clientEnv = (import.meta as { env?: { PROD?: boolean; VITE_ENABLE_DEMO_MODE?: string } }).env
+  const isProd = Boolean(clientEnv?.PROD)
+  const isDedicatedDemoBuild = clientEnv?.VITE_ENABLE_DEMO_MODE === 'true'
+
+  if (isProd && !isDedicatedDemoBuild) {
+    return false
+  }
+
+  if (isDedicatedDemoBuild) {
+    return true
+  }
+
+  // CRITICAL RULE 3: In development/test environments, explicitly requested by URL (?demo=true / ?demo=1)
   try {
     const loc = typeof window !== 'undefined' ? window.location : (globalThis as unknown as { location?: Location }).location
     if (loc?.search) {
@@ -25,7 +58,7 @@ export function isDemoModeEnabled(): boolean {
     // location might not be available in non-browser runtimes
   }
 
-  // 2. Explicit localStorage toggle
+  // CRITICAL RULE 4: Explicit localStorage toggle (used in development/testing only when NOT logged in)
   try {
     const storage = typeof window !== 'undefined' ? window.localStorage : globalThis.localStorage
     if (storage?.getItem('raahi.demo_mode') === 'true') {
@@ -35,22 +68,18 @@ export function isDemoModeEnabled(): boolean {
     // localStorage may be disabled or unavailable
   }
 
-  // 3. Explicit Vite environment variable
-  try {
-    const clientEnv = (import.meta as { env?: { VITE_ENABLE_DEMO_MODE?: string } }).env
-    if (clientEnv?.VITE_ENABLE_DEMO_MODE === 'true') {
-      return true
-    }
-  } catch {
-    // ignore
-  }
-
   return false
 }
 
 export function setDemoMode(enabled: boolean): void {
   try {
     const storage = typeof window !== 'undefined' ? window.localStorage : globalThis.localStorage
+    const hasAuthToken = Boolean(storage?.getItem('raahi.authToken.v1'))
+    if (hasAuthToken) {
+      // Never allow enabling demo mode while authenticated
+      storage?.removeItem('raahi.demo_mode')
+      return
+    }
     if (enabled) {
       storage?.setItem('raahi.demo_mode', 'true')
     } else {

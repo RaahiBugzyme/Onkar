@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { fetchPublicProfile, type FeedProfile, type PublicProfile } from '../api/discover'
 import { ApiError, resolveMediaUrl } from '../api/client'
-import { isDemoModeEnabled } from '../utils/demoEnvironment'
+import { fetchChats } from '../api/chat'
 import { Card } from '../components/Card'
 import { LoadingState } from '../components/LoadingState'
 import { PageContainer } from '../components/PageContainer'
@@ -10,16 +10,7 @@ import { generationThemes, type GenerationId } from '../data/generations'
 import { useTheme } from '../state/ThemeContext'
 import { useDiscover, type DiscoverAction } from '../state/DiscoverContext'
 import { useAuth } from '../state/AuthContext'
-import {
-  getDemoFeedCandidates,
-  swipeDemoCandidate,
-  rewindLastPass,
-  resetDemoFeed,
-  getDemoCandidateById,
-  hasLastPassedDemoCandidate,
-  ensureDemoConversation,
-  type DemoCandidate,
-} from '../data/demoAppData'
+import { BlockConfirmationModal, ReportUserModal, SafetyMenuDropdown } from '../components/SafetyModals'
 import '../styles/discover.css'
 
 const eraLabels: Record<string, string> = { genz: 'Gen Z', zillenial: 'Zillenial', millennial: 'Millennial' }
@@ -46,6 +37,7 @@ interface UnifiedCandidate {
   ringColor?: string
   cornerEmoji?: string
   initials?: string
+  isSuperLike?: boolean
 }
 
 function normalizeFeedProfile(feed: FeedProfile): UnifiedCandidate {
@@ -80,32 +72,6 @@ function normalizeFeedProfile(feed: FeedProfile): UnifiedCandidate {
     ringColor: ring,
     cornerEmoji: era === 'zillenial' ? '🎭' : era === 'millennial' ? '⚡' : '💀',
     initials: initial,
-  }
-}
-
-function normalizeDemoCandidate(demo: DemoCandidate): UnifiedCandidate {
-  return {
-    id: demo.id,
-    name: demo.name,
-    age: demo.age,
-    city: demo.city,
-    era: demo.era,
-    profession: demo.profession,
-    education: demo.education,
-    bio: demo.bio,
-    vibeTag: demo.vibeTag,
-    tags: demo.tags,
-    relationshipIntentions: demo.relationshipIntentions,
-    completenessCategory: demo.completenessCategory,
-    completenessScore: demo.completenessScore,
-    photos: demo.photos,
-    compatibilityScore: demo.compatibilityScore,
-    isVerified: true,
-    isDemo: true,
-    chatId: demo.chatId,
-    ringColor: demo.ringColor,
-    cornerEmoji: demo.cornerEmoji,
-    initials: demo.initials,
   }
 }
 
@@ -256,6 +222,11 @@ function ProfileCard({
           alt={`${candidate.name} photo ${activePhoto + 1}`}
           className="discover-card-photo-img"
           draggable={false}
+          onError={e => {
+            const initial = candidate.name.trim()[0]?.toUpperCase() ?? 'R'
+            const ring = candidate.era === 'zillenial' ? '#f59e0b' : candidate.era === 'millennial' ? '#06b6d4' : '#a855f7'
+            e.currentTarget.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="100%" height="100%"><rect width="100%" height="100%" fill="%23140a28"/><circle cx="200" cy="220" r="90" fill="${encodeURIComponent(ring)}" fill-opacity="0.25"/><circle cx="200" cy="220" r="75" fill="%231e0f38" stroke="${encodeURIComponent(ring)}" stroke-width="3"/><text x="200" y="250" font-family="sans-serif" font-size="70" font-weight="bold" fill="%23ffffff" text-anchor="middle">${initial}</text></svg>`
+          }}
         />
 
         {/* Tap zones for switching photos */}
@@ -318,31 +289,44 @@ function ProfileCard({
 }
 
 export function DiscoverPage() {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const {
     currentProfile: liveProfile,
     profiles: liveProfiles,
     loading: liveLoading,
+    error: liveError,
     recordAction,
     refresh,
   } = useDiscover()
   const { generation } = useTheme()
   const navigate = useNavigate()
 
-  const [demoCandidates, setDemoCandidates] = useState<DemoCandidate[]>(getDemoFeedCandidates)
   const [busy, setBusy] = useState(false)
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null)
   const [matchedCandidate, setMatchedCandidate] = useState<UnifiedCandidate | null>(null)
   const [detailsCandidate, setDetailsCandidate] = useState<UnifiedCandidate | null>(null)
-  const [canRewind, setCanRewind] = useState(() => hasLastPassedDemoCandidate())
-  const [isRestoredRewind, setIsRestoredRewind] = useState(false)
+  const [showCandidateBlock, setShowCandidateBlock] = useState(false)
+  const [showCandidateReport, setShowCandidateReport] = useState(false)
 
-  // In production for logged-in users, strictly use real backend candidates unless demo mode is explicitly enabled
-  const isUsingLiveApi = Boolean(user) && !isDemoModeEnabled()
+  useEffect(() => {
+    const handleBlocked = () => {
+      void refresh()
+    }
+    window.addEventListener('raahi:user-blocked', handleBlocked)
+    return () => {
+      window.removeEventListener('raahi:user-blocked', handleBlocked)
+    }
+  }, [refresh])
 
-  const activeCandidate: UnifiedCandidate | null = isUsingLiveApi
-    ? (liveProfile ? normalizeFeedProfile(liveProfile) : null)
-    : (demoCandidates[0] ? normalizeDemoCandidate(demoCandidates[0]) : null)
+  if (authLoading) {
+    return <LoadingState label="Checking your Raahi session…" />
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  const activeCandidate: UnifiedCandidate | null = liveProfile ? normalizeFeedProfile(liveProfile) : null
 
   function showToast(message: string) {
     setFeedbackToast(message)
@@ -350,68 +334,49 @@ export function DiscoverPage() {
   }
 
   async function handleAction(action: DiscoverAction) {
-    if (!activeCandidate || busy) return
+    if (!activeCandidate || busy || !liveProfile) return
     setBusy(true)
-    setIsRestoredRewind(false)
 
-    if (action === 'pass') {
-      setCanRewind(true)
-    }
-
-    if (isUsingLiveApi && liveProfile) {
-      // Real API action
-      const matched = await recordAction(liveProfile, action)
-      setBusy(false)
-      const actionName = action === 'superlike' ? 'Super Liked ⭐' : action === 'like' ? 'Liked 💖' : 'Passed 👋'
-      showToast(`${actionName} ${activeCandidate.name}`)
-      if (matched) {
-        setMatchedCandidate(activeCandidate)
-      }
-      return
-    }
-
-    // Demo Mode action
-    const result = swipeDemoCandidate(activeCandidate.id, action)
-    setDemoCandidates(getDemoFeedCandidates())
+    const candidateToAct = activeCandidate
+    const profileToAct = liveProfile
+    const result = await recordAction(profileToAct, action)
     setBusy(false)
+    if (!result) return
 
-    const actionText = action === 'superlike' ? 'Super Liked ⭐' : action === 'like' ? 'Liked 💖' : 'Passed 👋'
-    showToast(`${actionText} ${activeCandidate.name}`)
+    const actionName = action === 'superlike' ? 'Super Liked ⭐' : action === 'like' ? 'Liked 💖' : 'Passed 👋'
+    showToast(`${actionName} ${candidateToAct.name}`)
 
-    if (result.isMatch) {
-      setMatchedCandidate(activeCandidate)
+    if (action === 'superlike' || result.isMatch) {
+      let resolvedChatId = result.chatId || candidateToAct.chatId
+      if (!resolvedChatId) {
+        try {
+          const chats = await fetchChats()
+          const found = chats.find(c => c.user.id === candidateToAct.id)
+          if (found) resolvedChatId = found.chat_id
+        } catch {
+          // Keep null if chats cannot be reached
+        }
+      }
+
+      setMatchedCandidate({
+        ...candidateToAct,
+        isSuperLike: action === 'superlike',
+        chatId: resolvedChatId,
+      })
     }
   }
 
   function handleRewind() {
-    if (!canRewind || busy) return
-    const restored = rewindLastPass()
-    if (restored) {
-      setCanRewind(hasLastPassedDemoCandidate())
-      setDemoCandidates(getDemoFeedCandidates())
-      setIsRestoredRewind(true)
-      showToast(`Brought back ${restored.name} ↩️`)
-    } else {
-      setCanRewind(false)
-      showToast('No recent pass to rewind.')
-    }
+    showToast('No recent pass to rewind.')
   }
 
   function handleResetFeed() {
-    if (isUsingLiveApi) {
-      void refresh()
-      showToast('Discover feed refreshed! ✨')
-      return
-    }
-    resetDemoFeed()
-    setCanRewind(false)
-    setIsRestoredRewind(false)
-    setDemoCandidates(getDemoFeedCandidates())
-    showToast('Feed refreshed with fresh candidates! ✨')
+    void refresh()
+    showToast('Discover feed refreshed! ✨')
   }
 
   const theme = generationThemes[generation] || generationThemes.genz
-  const candidatesRemaining = isUsingLiveApi ? liveProfiles.length : demoCandidates.length
+  const candidatesRemaining = liveProfiles.length
 
   return (
     <PageContainer className="discover-page discover-live-page page-enter">
@@ -444,7 +409,25 @@ export function DiscoverPage() {
       </header>
 
       {/* Discovery Stage */}
-      {liveLoading && !activeCandidate ? (
+      {liveError && !liveLoading ? (
+        <Card className="discover-empty card-enter">
+          <div className="discover-empty-icon" aria-hidden="true">
+            <span className="e e-float">⚠️</span>
+          </div>
+          <p className="integration-eyebrow">SOMETHING WENT WRONG</p>
+          <h2>Could not load profiles</h2>
+          <p>{liveError}</p>
+          <div className="discover-detail-actions" style={{ justifyContent: 'center' }}>
+            <button
+              type="button"
+              className="matches-primary-button"
+              onClick={() => void refresh()}
+            >
+              Try again 🔄
+            </button>
+          </div>
+        </Card>
+      ) : liveLoading && !activeCandidate ? (
         <LoadingState label="Finding eligible profiles around you…" />
       ) : activeCandidate ? (
         <div className="discover-live-stage">
@@ -458,7 +441,6 @@ export function DiscoverPage() {
             onAction={handleAction}
             onOpenDetails={() => navigate(`/discover/${activeCandidate.id}`)}
             busy={busy}
-            isRestored={isRestoredRewind}
           />
 
           {/* Swipe Hint */}
@@ -472,10 +454,10 @@ export function DiscoverPage() {
           <div className="swipe-actions discover-actions">
             <button
               type="button"
-              className={`discover-action rewind${canRewind ? ' active-rewind' : ''}`}
+              className="discover-action rewind"
               onClick={handleRewind}
-              disabled={busy || !canRewind}
-              title={canRewind ? 'Rewind last pass' : 'No recent pass to rewind'}
+              disabled={busy}
+              title="Rewind last pass"
               aria-label="Rewind last pass"
             >
               <svg
@@ -534,9 +516,7 @@ export function DiscoverPage() {
           <p className="integration-eyebrow">YOU’RE ALL CAUGHT UP</p>
           <h2>No more profiles right now.</h2>
           <p>
-            {isUsingLiveApi
-              ? "You’ve seen everyone in your current circle! Catch up with your matches or refresh your feed anytime."
-              : "You’ve seen everyone in your current circle! Catch up with your matches or refresh the demo deck anytime."}
+            You’ve seen everyone in your current circle! Catch up with your matches or refresh your feed anytime.
           </p>
           <div className="discover-detail-actions" style={{ justifyContent: 'center' }}>
             <button
@@ -544,7 +524,7 @@ export function DiscoverPage() {
               className="matches-primary-button"
               onClick={handleResetFeed}
             >
-              {isUsingLiveApi ? 'Refresh Discover 🧭' : 'Reset demo deck ✨'}
+              Refresh Discover 🧭
             </button>
             <button
               type="button"
@@ -557,27 +537,40 @@ export function DiscoverPage() {
         </Card>
       )}
 
-      {/* MATCH CELEBRATION MODAL */}
+      {/* MATCH / SUPER LIKE CELEBRATION MODAL */}
       {matchedCandidate && (
-        <div className="discover-celebration-overlay" role="dialog" aria-modal="true" aria-label="Mutual match celebration">
+        <div
+          className="discover-celebration-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={matchedCandidate.isSuperLike ? `Super Like sent to ${matchedCandidate.name}` : `Mutual match with ${matchedCandidate.name}`}
+        >
           <div className="celebration-modal-card">
-            <p className="celebration-eyebrow">IT’S A MUTUAL MATCH!</p>
-            <h2 className="celebration-title">You two vibed! 🎉</h2>
+            <p className="celebration-eyebrow">
+              {matchedCandidate.isSuperLike ? 'SUPER LIKE SENT! ⭐' : 'IT’S A MUTUAL MATCH!'}
+            </p>
+            <h2 className="celebration-title">
+              {matchedCandidate.isSuperLike ? `You Super Liked ${matchedCandidate.name}!` : 'You two vibed! 🎉'}
+            </h2>
             <p className="celebration-subtitle">
-              You and {matchedCandidate.name} both liked each other on Raahi.
+              {matchedCandidate.isSuperLike
+                ? `You sent a Super Like to ${matchedCandidate.name}. You stand out in their deck!`
+                : `You and ${matchedCandidate.name} both liked each other on Raahi.`}
             </p>
 
             <div className="celebration-clash" aria-hidden="true">
               <div
                 className="celebration-avatar-ring"
-                style={{ borderColor: 'var(--ep)', boxShadow: '0 0 24px rgba(216,61,180,0.5)' }}
+                style={{ borderColor: 'var(--ep)', boxShadow: '0 0 24px rgba(216,61,180,0.5)', overflow: 'hidden' }}
               >
                 <span>{user?.username ? user.username[0]?.toUpperCase() : '😎'}</span>
               </div>
-              <span className="celebration-sparkle-center">💗</span>
+              <span className="celebration-sparkle-center">
+                {matchedCandidate.isSuperLike ? '⭐' : '💗'}
+              </span>
               <div
                 className="celebration-avatar-ring"
-                style={{ borderColor: matchedCandidate.ringColor, boxShadow: `0 0 24px ${matchedCandidate.ringColor}` }}
+                style={{ borderColor: matchedCandidate.ringColor || 'var(--ep)', boxShadow: `0 0 24px ${matchedCandidate.ringColor || 'var(--ep)'}`, overflow: 'hidden' }}
               >
                 <span>{matchedCandidate.initials || matchedCandidate.name[0]}</span>
               </div>
@@ -585,18 +578,18 @@ export function DiscoverPage() {
 
             <div className="celebration-actions">
               <Link
-                to={`/conversations/${matchedCandidate.chatId || matchedCandidate.id}`}
+                to={matchedCandidate.chatId ? `/conversations/${matchedCandidate.chatId}` : '/conversations'}
                 className="celebration-chat-btn bpulse"
                 onClick={() => setMatchedCandidate(null)}
               >
-                Say Hi to {matchedCandidate.name} 👋
+                Message 👋
               </Link>
               <button
                 type="button"
                 className="celebration-keep-btn"
                 onClick={() => setMatchedCandidate(null)}
               >
-                Keep swiping
+                Keep Swiping
               </button>
             </div>
           </div>
@@ -617,6 +610,13 @@ export function DiscoverPage() {
             onClick={e => e.stopPropagation()}
           >
             <div className="modal-drag-handle" />
+            <div style={{ position: 'absolute', top: 18, left: 18, zIndex: 10 }}>
+              <SafetyMenuDropdown
+                onOpenReport={() => setShowCandidateReport(true)}
+                onOpenBlock={() => setShowCandidateBlock(true)}
+                ariaLabel={`Safety options for ${detailsCandidate.name}`}
+              />
+            </div>
             <button
               type="button"
               className="modal-close-corner"
@@ -634,6 +634,11 @@ export function DiscoverPage() {
                   src={resolveMediaUrl(photo)}
                   alt={`${detailsCandidate.name} view ${i + 1}`}
                   className="modal-gallery-img"
+                  onError={e => {
+                    const initial = detailsCandidate.name.trim()[0]?.toUpperCase() ?? 'R'
+                    const ring = detailsCandidate.era === 'zillenial' ? '#f59e0b' : detailsCandidate.era === 'millennial' ? '#06b6d4' : '#a855f7'
+                    e.currentTarget.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="100%" height="100%"><rect width="100%" height="100%" fill="%23140a28"/><circle cx="200" cy="220" r="90" fill="${encodeURIComponent(ring)}" fill-opacity="0.25"/><circle cx="200" cy="220" r="75" fill="%231e0f38" stroke="${encodeURIComponent(ring)}" stroke-width="3"/><text x="200" y="250" font-family="sans-serif" font-size="70" font-weight="bold" fill="%23ffffff" text-anchor="middle">${initial}</text></svg>`
+                  }}
                 />
               ))}
             </div>
@@ -732,6 +737,30 @@ export function DiscoverPage() {
               </button>
             </div>
           </div>
+
+          <BlockConfirmationModal
+            isOpen={showCandidateBlock}
+            targetUserId={detailsCandidate.id}
+            targetName={detailsCandidate.name}
+            isMatchOrChat={false}
+            onClose={() => setShowCandidateBlock(false)}
+            onSuccess={() => {
+              const blockedId = detailsCandidate.id
+              const blockedName = detailsCandidate.name
+              setDetailsCandidate(null)
+              window.dispatchEvent(new CustomEvent('raahi:user-blocked', { detail: { userId: blockedId } }))
+              showToast(`Blocked ${blockedName}. Removed from Discover.`)
+            }}
+          />
+          <ReportUserModal
+            isOpen={showCandidateReport}
+            targetUserId={detailsCandidate.id}
+            targetName={detailsCandidate.name}
+            onClose={() => setShowCandidateReport(false)}
+            onSuccess={(msg) => {
+              showToast(msg)
+            }}
+          />
         </div>
       )}
     </PageContainer>
@@ -740,22 +769,17 @@ export function DiscoverPage() {
 
 export function DiscoverProfilePage() {
   const { profileId } = useParams()
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const [profile, setProfile] = useState<PublicProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [activePhotoIndex, setActivePhotoIndex] = useState(0)
-
-  const numId = profileId ? Number(profileId) : NaN
-  const demoCandidate = !user && !Number.isNaN(numId) ? getDemoCandidateById(numId) : null
+  const [showProfileBlock, setShowProfileBlock] = useState(false)
+  const [showProfileReport, setShowProfileReport] = useState(false)
 
   useEffect(() => {
     let active = true
-    if (demoCandidate) {
-      setLoading(false)
-      return
-    }
 
     if (!profileId || !/^\d+$/.test(profileId)) {
       setError('Profile not found.')
@@ -785,122 +809,11 @@ export function DiscoverProfilePage() {
     return () => {
       active = false
     }
-  }, [profileId, demoCandidate])
+  }, [profileId])
 
+  if (authLoading) return <LoadingState label="Checking your Raahi session…" />
+  if (!user) return <Navigate to="/login" replace />
   if (loading) return <LoadingState label="Loading profile details…" />
-
-  if (demoCandidate) {
-    const currentPhoto = resolveMediaUrl(demoCandidate.photos[activePhotoIndex] || demoCandidate.photos[0])
-    return (
-      <PageContainer className="discover-page page-enter">
-        <div className="discover-detail-container">
-          <Link className="discover-back-link" to="/discover">
-            ← Back to Discover
-          </Link>
-
-          <div className="discover-detail-grid">
-            {/* Left Column: Responsive Photo Gallery */}
-            <div className="discover-detail-gallery">
-              <div className="discover-detail-main-img-wrap">
-                <img
-                  src={currentPhoto}
-                  alt={`${demoCandidate.name} photo ${activePhotoIndex + 1}`}
-                  className="discover-detail-main-img"
-                />
-                <span className="discover-detail-corner-badge">
-                  {eraLabels[demoCandidate.era] ?? demoCandidate.era} · {demoCandidate.city}
-                </span>
-                <span className="discover-detail-sample-badge">
-                  ✨ SAMPLE PROFILE
-                </span>
-              </div>
-
-              {demoCandidate.photos.length > 1 && (
-                <div className="discover-detail-thumb-row" aria-label="Photo gallery thumbnails">
-                  {demoCandidate.photos.map((photo, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className={`discover-detail-thumb-btn${i === activePhotoIndex ? ' active' : ''}`}
-                      onClick={() => setActivePhotoIndex(i)}
-                      aria-label={`View photo ${i + 1}`}
-                    >
-                      <img src={resolveMediaUrl(photo)} alt={`${demoCandidate.name} thumbnail ${i + 1}`} />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Right Column: Profile Information Card */}
-            <Card className="discover-detail-copy card-enter">
-              <p className="integration-eyebrow">PROFILE DETAILS</p>
-              <h1>
-                {demoCandidate.name}
-                {demoCandidate.age ? `, ${demoCandidate.age}` : ''}
-              </h1>
-              <p className="discover-detail-meta">
-                {demoCandidate.city} · {eraLabels[demoCandidate.era] ?? demoCandidate.era}
-              </p>
-
-              {(demoCandidate.profession || demoCandidate.education) && (
-                <p className="discover-detail-profession" style={{ fontSize: '.88rem', color: 'rgba(235,230,250,0.85)', margin: '4px 0 12px' }}>
-                  {demoCandidate.profession && <span>💼 {demoCandidate.profession}</span>}
-                  {demoCandidate.profession && demoCandidate.education && <span> · </span>}
-                  {demoCandidate.education && <span>🎓 {demoCandidate.education}</span>}
-                </p>
-              )}
-
-              {demoCandidate.relationshipIntentions && (
-                <div className="discover-detail-intentions" style={{ fontSize: '.82rem', color: '#f3e8ff', background: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.35)', borderRadius: 12, padding: '8px 14px', margin: '10px 0 14px', display: 'inline-block' }}>
-                  <strong>Looking for:</strong> {demoCandidate.relationshipIntentions}
-                </div>
-              )}
-
-              {demoCandidate.bio && <p style={{ lineHeight: 1.6, margin: '8px 0 14px' }}>{demoCandidate.bio}</p>}
-
-              {demoCandidate.tags && demoCandidate.tags.length > 0 && (
-                <>
-                  <h2>Passions & Lifestyle</h2>
-                  <div className="discover-tags" style={{ margin: '8px 0 16px' }}>
-                    {demoCandidate.tags.map((t, idx) => (
-                      <span key={idx}>{t}</span>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {demoCandidate.vibeTag && (
-                <>
-                  <h2>Current vibe</h2>
-                  <div className="discover-tags">
-                    <span>{demoCandidate.vibeTag}</span>
-                  </div>
-                </>
-              )}
-
-              <div className="discover-detail-actions">
-                <Link
-                  className="matches-primary-button"
-                  to={`/conversations/${demoCandidate.chatId}`}
-                  onClick={() => ensureDemoConversation(demoCandidate.id)}
-                >
-                  Open Chat 👋
-                </Link>
-                <button
-                  type="button"
-                  className="matches-outline-button"
-                  onClick={() => navigate('/discover')}
-                >
-                  Back to Discover
-                </button>
-              </div>
-            </Card>
-          </div>
-        </div>
-      </PageContainer>
-    )
-  }
 
   if (error || !profile) {
     return (
@@ -916,25 +829,74 @@ export function DiscoverProfilePage() {
     )
   }
 
-  const name = profile.full_name || profile.username
+  const name = profile.full_name || profile.username || 'Raahi member'
   const initial = name.trim()[0]?.toUpperCase() ?? 'R'
   const eraKey = profile.era || 'genz'
+  const photos = profile.photos && profile.photos.length > 0
+    ? profile.photos
+    : (profile.photo_url ? [profile.photo_url] : [])
+  const currentPhoto = photos.length > 0 ? resolveMediaUrl(photos[activePhotoIndex] || photos[0]) : null
+
   return (
     <PageContainer className="discover-page page-enter">
       <div className="discover-detail-container">
-        <Link className="discover-back-link" to="/discover">
-          ← Back to Discover
-        </Link>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <Link className="discover-back-link" to="/discover" style={{ marginTop: 0 }}>
+            ← Back to Discover
+          </Link>
+          <SafetyMenuDropdown
+            onOpenReport={() => setShowProfileReport(true)}
+            onOpenBlock={() => setShowProfileBlock(true)}
+            ariaLabel={`Safety options for ${name}`}
+          />
+        </div>
         <div className="discover-detail-grid">
-          {/* Left Column: Live Avatar Artwork */}
+          {/* Left Column: Photos or Avatar Artwork */}
           <div className="discover-detail-gallery">
-            <div className={`discover-artwork era-${eraKey}`} style={{ minHeight: 380, borderRadius: 24 }}>
-              <div className="discover-artwork-orbit" />
-              <div className="discover-avatar e-float">
-                <span>{initial}</span>
+            {currentPhoto ? (
+              <div className="discover-detail-main-img-wrap">
+                <img
+                  src={currentPhoto}
+                  alt={`${name} photo ${activePhotoIndex + 1}`}
+                  className="discover-detail-main-img"
+                  onError={e => {
+                    const ring = eraKey === 'zillenial' ? '#f59e0b' : eraKey === 'millennial' ? '#06b6d4' : '#a855f7'
+                    e.currentTarget.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="100%" height="100%"><rect width="100%" height="100%" fill="%23140a28"/><circle cx="200" cy="220" r="90" fill="${encodeURIComponent(ring)}" fill-opacity="0.25"/><circle cx="200" cy="220" r="75" fill="%231e0f38" stroke="${encodeURIComponent(ring)}" stroke-width="3"/><text x="200" y="250" font-family="sans-serif" font-size="70" font-weight="bold" fill="%23ffffff" text-anchor="middle">${initial}</text></svg>`
+                  }}
+                />
+                <span className="discover-detail-corner-badge">
+                  {eraLabels[eraKey] ?? eraKey} · {profile.city}
+                </span>
               </div>
-              <span className="discover-artwork-note">✦ Verified Raahi Member</span>
-            </div>
+            ) : (
+              <div className={`discover-artwork era-${eraKey}`} style={{ minHeight: 380, borderRadius: 24 }}>
+                <div className="discover-artwork-orbit" />
+                <div className="discover-avatar e-float">
+                  <span>{initial}</span>
+                </div>
+                <span className="discover-artwork-note">
+                  {(profile as any).is_verified || ((profile as any).is_face_verified && (profile as any).is_id_verified)
+                    ? '✦ Verified Raahi Member'
+                    : '✦ Raahi Member'}
+                </span>
+              </div>
+            )}
+
+            {photos.length > 1 && (
+              <div className="discover-detail-thumb-row" aria-label="Photo gallery thumbnails">
+                {photos.map((photo, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`discover-detail-thumb-btn${i === activePhotoIndex ? ' active' : ''}`}
+                    onClick={() => setActivePhotoIndex(i)}
+                    aria-label={`View photo ${i + 1}`}
+                  >
+                    <img src={resolveMediaUrl(photo)} alt={`${name} thumbnail ${i + 1}`} />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Right Column: Live Profile Info */}
@@ -947,7 +909,29 @@ export function DiscoverProfilePage() {
             <p className="discover-detail-meta">
               {profile.city} · {eraLabels[profile.era] ?? profile.era}
             </p>
+            {(profile.profession || profile.education) && (
+              <p className="discover-detail-profession" style={{ fontSize: '.88rem', color: 'rgba(235,230,250,0.85)', margin: '4px 0 12px' }}>
+                {profile.profession && <span>💼 {profile.profession}</span>}
+                {profile.profession && profile.education && <span> · </span>}
+                {profile.education && <span>🎓 {profile.education}</span>}
+              </p>
+            )}
+            {profile.relationship_intentions && (
+              <div className="discover-detail-intentions" style={{ fontSize: '.82rem', color: '#f3e8ff', background: 'rgba(168,85,247,0.18)', border: '1px solid rgba(168,85,247,0.35)', borderRadius: 12, padding: '8px 14px', margin: '10px 0 14px', display: 'inline-block' }}>
+                <strong>Looking for:</strong> {profile.relationship_intentions}
+              </div>
+            )}
             {profile.bio && <p style={{ lineHeight: 1.6, margin: '10px 0' }}>{profile.bio}</p>}
+            {profile.interests && profile.interests.length > 0 && (
+              <>
+                <h2>Passions & Lifestyle</h2>
+                <div className="discover-tags" style={{ margin: '8px 0 16px' }}>
+                  {profile.interests.map((t, idx) => (
+                    <span key={idx}>{t}</span>
+                  ))}
+                </div>
+              </>
+            )}
             {profile.vibe_tag && (
               <>
                 <h2>Current vibe</h2>
@@ -968,6 +952,27 @@ export function DiscoverProfilePage() {
           </Card>
         </div>
       </div>
+
+      <BlockConfirmationModal
+        isOpen={showProfileBlock}
+        targetUserId={Number(profileId)}
+        targetName={name}
+        isMatchOrChat={false}
+        onClose={() => setShowProfileBlock(false)}
+        onSuccess={() => {
+          window.dispatchEvent(new CustomEvent('raahi:user-blocked', { detail: { userId: Number(profileId) } }))
+          navigate('/discover')
+        }}
+      />
+      <ReportUserModal
+        isOpen={showProfileReport}
+        targetUserId={Number(profileId)}
+        targetName={name}
+        onClose={() => setShowProfileReport(false)}
+        onSuccess={() => {
+          navigate('/discover')
+        }}
+      />
     </PageContainer>
   )
 }

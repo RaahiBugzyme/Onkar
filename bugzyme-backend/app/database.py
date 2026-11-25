@@ -1,13 +1,16 @@
 
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.db_safety import validate_test_database_url
 
-load_dotenv()
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_BACKEND_DIR / ".env", override=False)
+load_dotenv(override=False)
 
 _pytest_active = "pytest" in sys.modules
 _test_mode = os.getenv("RAAHI_TEST_MODE") == "1"

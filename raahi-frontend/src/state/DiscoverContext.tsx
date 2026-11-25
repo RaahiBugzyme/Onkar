@@ -6,6 +6,12 @@ import { useDatingProfile } from './DatingProfileContext'
 import { useAuth } from './AuthContext'
 
 export type DiscoverAction = SwipeResponse['action']
+
+export interface RecordActionResult {
+  isMatch: boolean
+  chatId?: number
+}
+
 interface DiscoverContextValue {
   profiles: FeedProfile[]
   currentProfile: FeedProfile | null
@@ -14,14 +20,14 @@ interface DiscoverContextValue {
   actionError: string | null
   hasMore: boolean
   sessionLikes: number
-  recordAction: (profile: FeedProfile, action: DiscoverAction) => Promise<boolean>
+  recordAction: (profile: FeedProfile, action: DiscoverAction) => Promise<RecordActionResult | null>
   loadMore: () => Promise<void>
   refresh: () => Promise<void>
 }
 const DiscoverContext = createContext<DiscoverContextValue | null>(null)
 
 export function DiscoverProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const { loading: profileLoading } = useDatingProfile()
   const [profiles, setProfiles] = useState<FeedProfile[]>([])
   const [loading, setLoading] = useState(true)
@@ -51,9 +57,20 @@ export function DiscoverProvider({ children }: { children: ReactNode }) {
   }, [loadPage])
 
   useEffect(() => {
-    if (!user || profileLoading) return
+    if (authLoading) return
+    if (!user) {
+      setProfiles([])
+      setOffset(0)
+      setHasMore(false)
+      setError(null)
+      setActionError(null)
+      setSessionLikes(0)
+      setLoading(false)
+      return
+    }
+    if (profileLoading) return
     void refresh()
-  }, [user, profileLoading])
+  }, [user, authLoading, profileLoading, refresh])
 
   const loadMore = useCallback(async () => {
     if (!hasMore || loading) return
@@ -63,17 +80,20 @@ export function DiscoverProvider({ children }: { children: ReactNode }) {
     finally { setLoading(false) }
   }, [hasMore, loading, loadPage, offset])
 
-  const recordAction = useCallback(async (candidate: FeedProfile, action: DiscoverAction) => {
+  const recordAction = useCallback(async (candidate: FeedProfile, action: DiscoverAction): Promise<RecordActionResult | null> => {
     setActionError(null)
     try {
       const response = await submitSwipe(candidate.user_id, action)
       setProfiles(current => current.filter(item => item.user_id !== candidate.user_id))
       if (action === 'like' || action === 'superlike') setSessionLikes(count => count + 1)
       if (response.is_match) window.dispatchEvent(new CustomEvent('raahi:real-match', { detail: { userId: candidate.user_id } }))
-      return Boolean(response.is_match)
+      return {
+        isMatch: Boolean(response.is_match),
+        chatId: response.match?.chat_id,
+      }
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : 'Your action could not be saved. Please retry.')
-      return false
+      return null
     }
   }, [])
 
